@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace KifuwarabeGoPolypropylene.ThinkEngine;
 
-// 対局の証拠を収集する。得点計算がないため勝率や棋力は評価しない。
+// 対局の証拠を収集する。研究ルールの勝敗を記録するが大会ルールの棋力とは区別する。
 internal static class LessonCycle
 {
     public static int Run(string[] args)
@@ -37,7 +37,7 @@ internal static class LessonCycle
             // ランダムな序盤と、ランダム対戦相手の有無で観測局面を変える。
             bool randomOpponent = gameIndex % 4 >= 2;
             int openingLength = gameIndex % 5;
-            for (int ply = 0; ply < size * size * 8 + 100; ply++)
+            for (int ply = 0; ply < Board.MoveLimit; ply++)
             {
                 if (timer.Elapsed.TotalSeconds >= seconds) { outcome = "timeout"; break; }
                 int color = ply % 2 + 1;
@@ -66,17 +66,19 @@ internal static class LessonCycle
             bySize[size][3] += repeats;
             log.WriteLine(JsonSerializer.Serialize(new {
                 gameIndex, seed, size, randomOpponent, openingLength, outcome,
-                repeats, moves, areaEstimate = board.Score(7.5),
+                repeats, moves, moveCount = board.MoveCount,
+                stoneScore = outcome == "timeout" ? null : board.CountStones(),
                 lessons = board.Lessons.Reports, evidence = board.Lessons.Examples
             }));
             if (outcome == "timeout") break;
         }
         var summary = new {
-            version = 1, seed, requestedGames = games, completed, moveLimits, timedOut,
+            version = 2, seed, requestedGames = games, completed, moveLimits, timedOut,
+            adjudicatedGames = completed + moveLimits, moveLimit = Board.MoveLimit,
             repeatedPositions = repeated, elapsedSeconds = timer.Elapsed.TotalSeconds,
             byBoardSize = bySize.Select(pair => new { size = pair.Key, games = pair.Value[0], completed = pair.Value[1], moveLimits = pair.Value[2], repeats = pair.Value[3] }),
-            engineVersion = "0.2.0", rules = "Chinese area scoring, simple ko; no automatic dead-stone adjudication",
-            komi = 7.5, note = "Convergence observations only; area estimates assume remaining stones alive. Not a strength or win-rate evaluation."
+            engineVersion = "0.3.1", rules = "User-defined on-board stone counting, simple ko, 400 total plies including passes",
+            komi = 0, note = "Two passes or 400 plies: adjudicate by on-board stones only. Timeout is not adjudicated. Not standard Chinese area scoring or a tournament strength evaluation."
         };
         string json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(Path.Combine(directory, "summary.json"), json);

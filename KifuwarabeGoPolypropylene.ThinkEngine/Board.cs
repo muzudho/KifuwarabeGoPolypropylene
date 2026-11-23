@@ -2,6 +2,7 @@ namespace KifuwarabeGoPolypropylene.ThinkEngine;
 
 public sealed class Board(int size)
 {
+    public const int MoveLimit = 400;
     public int Size { get; } = size;
     private int[] cells = new int[size * size];
     private int[]? previous;
@@ -9,11 +10,14 @@ public sealed class Board(int size)
     public BattleLessons Lessons { get; init; } = new();
     private readonly Dictionary<string, string> failedCandidates = new();
     private static string Key(int[] position) => string.Concat(position.Select(c => (char)('0' + c)));
-    private Board Copy() => new(Size) { cells = (int[])cells.Clone(), previous = previous };
+    private Board Copy() => new(Size) { cells = (int[])cells.Clone(), previous = previous, MoveCount = MoveCount, ConsecutivePasses = ConsecutivePasses };
     public int At(int x, int y) => cells[y * Size + x];
     public string PositionKey => Key(cells);
     public int ConsecutivePasses { get; private set; }
-    public bool IsFinished => ConsecutivePasses >= 2;
+    public int MoveCount { get; private set; }
+    public bool ReachedMoveLimit => MoveCount >= MoveLimit;
+    public bool IsFinished => ConsecutivePasses >= 2 || ReachedMoveLimit;
+    public StoneScore CountStones() => new(cells.Count(c => c == 1), cells.Count(c => c == 2));
 
     // 中国式の面積計算。盤上に残る石を生き石として扱い、混在境界の空点は中立。
     // 死石の自動判定・合意による除去は未実装。争いがあれば打ち続けて解消する。
@@ -64,8 +68,8 @@ public sealed class Board(int size)
     }
     public bool Play(int color, int? point)
     {
-        if (color is not (1 or 2)) return false;
-        if (point is null) { previous = (int[])cells.Clone(); ConsecutivePasses++; return true; }
+        if (color is not (1 or 2) || ReachedMoveLimit) return false;
+        if (point is null) { previous = (int[])cells.Clone(); ConsecutivePasses++; MoveCount++; return true; }
         int p = point.Value;
         if (p < 0 || p >= cells.Length || cells[p] != 0) return false;
         var next = (int[])cells.Clone();
@@ -81,6 +85,7 @@ public sealed class Board(int size)
         previous = cells;
         cells = next;
         ConsecutivePasses = 0;
+        MoveCount++;
         history.Add(Key(cells));
         return true;
     }
@@ -101,8 +106,13 @@ public sealed class Board(int size)
     public int? Generate(int color)
     {
         if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        if (ReachedMoveLimit) return null;
+        int? fallback = null;
         for (int p = 0; p < cells.Length; p++)
         {
+            var trial = Copy();
+            if (!trial.Play(color, p)) continue;
+            fallback ??= p;
             string experience = $"{Key(cells)}:{(previous is null ? "" : Key(previous))}:{color}:{p}";
             if (failedCandidates.TryGetValue(experience, out string? learned))
             {
@@ -115,8 +125,6 @@ public sealed class Board(int size)
                 Lessons.RecordExample(new(id, Size, Key(cells), color, p));
                 failedCandidates[experience] = id;
             }
-            var trial = Copy();
-            if (!trial.Play(color, p)) continue;
             if (history.Contains(Key(trial.cells)))
             {
                 Observe("repeat-position", "過去の盤面に戻った");
@@ -127,25 +135,41 @@ public sealed class Board(int size)
                 Observe("fill-eye", "自分の眼を埋めた");
                 continue;
             }
-            bool captured = trial.cells.Count(c => c == 3 - color) < cells.Count(c => c == 3 - color);
-            // 実際に相手の一手を試し、置いた石が消えることを観測する。
-            // 取りを伴う手は、取り返しやコウの可能性があるので今回の対象外。
-            var replies = trial.NeighborsOfGroup(p).Take(2).ToArray();
-            if (!captured && replies.Length == 1 && replies.Any(reply =>
-                {
-                    var response = trial.Copy();
-                    return response.Play(3 - color, reply) && response.cells[p] == 0;
-                }))
+            int captured = cells.Count(c => c == 3 - color) - trial.cells.Count(c => c == 3 - color);
+            // 取りを伴う場合も、合法な取り返しの損失を観測する。
+            // 単純コウで禁止される取り返し、400手目後の存在しない応手は含めない。
+            int lost = trial.StonesLostToImmediateReply(color, p);
+            if (captured == 0 && lost > 0)
             {
                 Observe("immediate-capture", "置いた石を次の一手で取られた");
                 continue;
             }
+            if (captured > 0 && lost > captured)
+            {
+                Observe("capture-reversal", "石を取った直後に、それより多くの味方を取られた");
+                continue;
+            }
             Play(color, p);
             return p;
+        }
+        // 純碁風の研究ルール: 合法手が残る限り、戦訓だけを理由にパスしない。
+        if (fallback is int legal)
+        {
+            Play(color, legal);
+            return legal;
         }
         Play(color, null);
         return null;
     }
     private IEnumerable<int> NeighborsOfGroup(int p) => Group(cells, p).stones
         .SelectMany(Neighbors).Where(n => cells[n] == 0).Distinct();
+
+    internal int StonesLostToImmediateReply(int color, int p)
+    {
+        var replies = NeighborsOfGroup(p).Take(2).ToArray();
+        if (replies.Length != 1) return 0;
+        var response = Copy();
+        if (!response.Play(3 - color, replies[0]) || response.cells[p] != 0) return 0;
+        return cells.Count(c => c == color) - response.cells.Count(c => c == color);
+    }
 }

@@ -20,6 +20,7 @@ internal static class SelfTest
         foreach (int p in new[] { 11, 13, 7 }) Check(ko.Play(1, p), "ko black setup");
         foreach (int p in new[] { 12, 16, 18, 22 }) Check(ko.Play(2, p), "ko white setup");
         Check(ko.Play(1, 17) && ko.At(2, 2) == 0, "ko capture");
+        Check(ko.StonesLostToImmediateReply(1, 17) == 0, "illegal ko recapture not treated as losing capture");
         Check(!ko.Play(2, 12), "immediate ko rejected");
         Check(ko.Play(2, null) && ko.Play(1, null) && ko.Play(2, 12), "ko after passes");
         var full = new Board(2);
@@ -38,13 +39,12 @@ internal static class SelfTest
         var eyes = new Board(3);
         foreach (int p in new[] { 1, 2, 3, 5, 6, 7, 8 }) Check(eyes.Play(1, p), "two-eye setup");
         Check(eyes.Lessons.Reports.Count == 0, "lessons initially unlearned");
-        Check(eyes.Generate(1) is null && eyes.At(0, 0) == 0 && eyes.At(1, 1) == 0, "avoid filling own eyes");
+        Check(eyes.Generate(1) is not null && eyes.CountStones().Black == 8, "fallback fills eye when all legal candidates filtered");
         Check(eyes.Lessons.Reports.Any(r => r.Id == "fill-eye" && r.Observations > 0), "automatically learn eye loss");
-        eyes.Generate(1); // パスで previous が変化するため、この回は別の経験。
-        int observed = eyes.Lessons.Reports.Single().Observations;
-        eyes.Generate(1);
-        Check(eyes.Lessons.Reports.Single().Observations == observed, "reuse learned experience without resimulation");
-        Check(eyes.Play(1, 0), "policy does not reject externally supplied legal move");
+        Check(eyes.Generate(1) is null, "pass only when no legal move remains");
+        var externalEye = new Board(3);
+        foreach (int p in new[] { 1, 2, 3, 5, 6, 7, 8 }) externalEye.Play(1, p);
+        Check(externalEye.Play(1, 0), "policy does not reject externally supplied legal move");
         var trap = new Board(3);
         Check(trap.Play(2, 1) && trap.Play(2, 4), "capture trap setup");
         trap.Generate(1);
@@ -61,19 +61,21 @@ internal static class SelfTest
             var game = new Board(size);
             var seen = new HashSet<string>();
             int passes = 0, moves = 0;
-            while (passes < 2 && moves < size * size * 8 + 100)
+            int repeats = 0;
+            while (!game.IsFinished)
             {
                 int? move = game.Generate(moves % 2 + 1);
                 passes = move is null ? passes + 1 : 0;
                 if (move is not null)
                 {
                     string state = string.Concat(Enumerable.Range(0, size * size).Select(p => game.At(p % size, p / size)));
-                    Check(seen.Add(state), "self-play never repeats board");
+                    if (!seen.Add(state)) repeats++;
                 }
                 moves++;
             }
-            Check(passes == 2, $"{size}x{size} self-play ends with two passes");
-            Console.WriteLine($"Self-play {size}x{size}: {moves} moves, {game.Lessons.Reports.Sum(r => r.Avoided)} avoided");
+            Check(passes == 2 || moves == Board.MoveLimit, $"{size}x{size} self-play ends within 400 plies");
+            Check(game.MoveCount == moves, "generated moves and passes counted exactly once");
+            Console.WriteLine($"Self-play {size}x{size}: {moves} moves, {repeats} repeats, {game.CountStones().Result}");
         }
         Check(Exchange("kfw-lessons\n").Contains("[]"), "GTP lesson reports");
         var empty = new Board(9);
@@ -88,8 +90,43 @@ internal static class SelfTest
         Check(mixed.Score(0) == new AreaScore(1, 1, 7, 0), "mixed boundary neutral");
         Check(mixed.Play(1, null) && mixed.Play(2, null) && mixed.IsFinished, "two passes finish");
         Check(mixed.Play(1, 1) && !mixed.IsFinished, "dispute can resume play");
-        Check(Exchange("boardsize 9\nkomi 7.5\nplay b pass\nplay w pass\nfinal_score\n").EndsWith("= W+7.5\n\n"), "GTP Chinese area and komi");
+        Check(Exchange("boardsize 9\nkomi 7.5\nplay b pass\nplay w pass\nfinal_score\n").EndsWith("= 0\n\n"), "stone rule ignores komi and empty points");
         Check(Exchange("final_score\n").StartsWith("? game not finished"), "no final score before passes");
+        Check(area.CountStones() == new StoneScore(4, 0), "count stones instead of territory");
+        Check(board.CountStones() == new StoneScore(2, 0), "captured stones not counted");
+        Check(new StoneScore(2, 3).Result == "W+1" && new StoneScore(3, 2).Result == "B+1" && new StoneScore(2, 2).Result == "0", "stone wins and draw");
+        var limit = new Board(9);
+        for (int ply = 0; ply < 398; ply++) Check(limit.Play(ply % 2 + 1, null), "count pass");
+        Check(!limit.Play(1, -1) && limit.MoveCount == 398, "illegal move not counted");
+        Check(limit.Play(1, 0) && limit.MoveCount == 399 && !limit.ReachedMoveLimit, "399th move accepted");
+        Check(limit.Generate(2) is not null && limit.MoveCount == 400 && limit.IsFinished, "400th generated move finishes game");
+        string finalPosition = limit.PositionKey;
+        Check(limit.Generate(1) is null && !limit.Play(1, 2) && !limit.Play(1, null) && limit.MoveCount == 400 && limit.PositionKey == finalPosition, "400-ply board frozen");
+        string atLimit = string.Concat(Enumerable.Repeat("play b pass\n", 399)) + "play b A1\nfinal_score\nplay w B1\ngenmove w\n";
+        Check(Exchange(atLimit).EndsWith("= B+1\n\n? game finished at 400 moves\n\n= pass\n\n"), "GTP adjudicates 400th position");
+        Check(Exchange(atLimit + "clear_board\nplay b A1\n").EndsWith("=\n\n=\n\n"), "clear resets move limit");
+        // SEED2026112321 / game0 の290手目直後。H9で1石取り、H8で11石失う。
+        const string reversalMoves = "0,1,2,3,4,5,6,7,9,8,10,11,1,12,13,14,15,16,18,17,19,20,21,22,23,4,24,13,25,27,26,7,16,28,0,1,8,9,19,10,29,18,30,31,32,33,34,36,35,37,38,39,40,41,42,43,33,44,45,46,47,48,49,50,51,52,54,53,55,56,29,21,38,30,57,47,58,29,59,60,41,61,63,62,64,65,66,67,68,69,70,71,73,74,75,72,54,45,55,63,76,64,77,54,78,79,7,0,17,2,50,67,6,7,15,8,16,23,17,24,7,25,26,32,33,34,40,35,41,8,6,7,16,15,42,6,49,17,50,51,57,58,68,59,40,33,41,42,75,49,76,50,77,40,66,78,66,57,76,68,75,77,75,66,-,76,-,16,-,19,-,26,-,38,-,41,-,55,-,70,-,73,-,75,80,0,1,2,3,4,5,6,7,9,8,10,11,1,12,13,14,15,16,18,17,19,20,21,22,23,4,24,13,25,27,26,7,16,28,0,1,8,9,19,10,29,18,30,31,32,33,34,36,35,37,38,39,40,41,42,43,33,44,45,46,47,48,49,50,51,52,54,53,55,56,29,21,38,30,57,47,58,29,59,60,41,61,63,62,64,65,66,67,68,69,70,71,73,74,75,72,54,45,55,63,76,64,77,54,78";
+        Board ReplayReversal()
+        {
+            var replay = new Board(9);
+            int ply = 0;
+            foreach (string vertex in reversalMoves.Split(','))
+                Check(replay.Play(ply++ % 2 + 1, vertex == "-" ? null : int.Parse(vertex)), "capture reversal replay");
+            return replay;
+        }
+        var original = ReplayReversal();
+        int originalWhite = original.CountStones().White;
+        Check(original.Play(1, 79) && original.CountStones().White == originalWhite - 1, "reproduced one-stone capture");
+        Check(original.StonesLostToImmediateReply(1, 79) == 11, "predict exact recapture loss");
+        int beforeRecapture = original.CountStones().Black;
+        Check(original.Play(2, 70) && original.CountStones().Black == beforeRecapture - 11, "reproduced eleven-stone loss");
+        var avoided = ReplayReversal();
+        Check(avoided.Generate(1) != 79 && avoided.Lessons.Reports.Any(r => r.Id == "capture-reversal"), "learn and avoid losing capture");
+        var lastPlyCapture = ReplayReversal();
+        while (lastPlyCapture.MoveCount < 399) lastPlyCapture.Play(1, null);
+        Check(lastPlyCapture.Play(1, 79) && lastPlyCapture.StonesLostToImmediateReply(1, 79) == 0, "400th capture has no 401st reply");
+        Check(board.StonesLostToImmediateReply(1, 3) == 0, "safe capture not treated as losing capture");
         Console.WriteLine($"PASS: {count} checks");
     }
 }

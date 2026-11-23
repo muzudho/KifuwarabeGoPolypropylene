@@ -5,7 +5,6 @@ public sealed class GtpEngine
 {
     private const string Columns = "ABCDEFGHJKLMNOPQRST";
     private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "showboard", "final_score", "kfw-lessons", "quit"];
-    private double komi;
     private readonly BattleLessons lessons = new();
     private Board board = new(19);
     public GtpEngine() { board = new Board(19) { Lessons = lessons }; }
@@ -37,11 +36,11 @@ public sealed class GtpEngine
         {
             case "protocol_version": return "2";
             case "name": return "KifuwarabeGoPolypropylene";
-            case "version": return "0.2.0";
+            case "version": return "0.3.1";
             case "kfw-lessons": return System.Text.Json.JsonSerializer.Serialize(board.Lessons.Reports);
             case "final_score":
-                if (!board.IsFinished) throw new ArgumentException("game not finished; play out disputed stones and pass twice");
-                return board.Score(komi).Result;
+                if (!board.IsFinished) throw new ArgumentException("game not finished; pass twice or reach 400 moves");
+                return board.CountStones().Result;
             case "known_command": return Commands.Contains(args[0]) ? "true" : "false";
             case "list_commands": return string.Join('\n', Commands);
             case "boardsize":
@@ -50,9 +49,10 @@ public sealed class GtpEngine
             case "clear_board": board = new Board(board.Size) { Lessons = lessons }; return "";
             case "komi":
                 if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double value) || !double.IsFinite(value)) throw new ArgumentException("invalid komi");
-                komi = value;
+                // GTP 接続のため受理するが、指定の石数ルールではコミを加算しない。
                 return "";
             case "play":
+                if (board.ReachedMoveLimit) throw new ArgumentException("game finished at 400 moves");
                 if (!board.Play(Color(args[0]), ParseVertex(args[1]))) throw new ArgumentException("illegal move");
                 return "";
             case "genmove": return FormatVertex(board.Generate(Color(args[0])));

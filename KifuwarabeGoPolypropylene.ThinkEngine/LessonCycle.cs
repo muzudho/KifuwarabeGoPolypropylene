@@ -22,18 +22,20 @@ internal static class LessonCycle
         var timer = Stopwatch.StartNew();
         var random = new Random(seed);
         int completed = 0, moveLimits = 0, timedOut = 0, repeated = 0;
+        var bySize = new Dictionary<int, int[]>();
         using var log = new StreamWriter(Path.Combine(directory, "games.jsonl"), false) { AutoFlush = true };
         for (int gameIndex = 0; gameIndex < games; gameIndex++)
         {
             if (timer.Elapsed.TotalSeconds >= seconds) { timedOut++; break; }
-            int size = new[] { 3, 5, 9, 19 }[gameIndex % 4];
+            // 9路・19路を優先し、各サイズで自己対局とランダム相手の両方を行う。
+            int size = new[] { 9, 19, 9, 19, 3, 5, 3, 5 }[gameIndex % 8];
             var board = new Board(size);
             var moves = new List<int?>();
             var seen = new HashSet<string> { board.PositionKey };
             int passes = 0, repeats = 0;
             string outcome = "move-limit";
             // ランダムな序盤と、ランダム対戦相手の有無で観測局面を変える。
-            bool randomOpponent = gameIndex % 2 == 1;
+            bool randomOpponent = gameIndex % 4 >= 2;
             int openingLength = gameIndex % 5;
             for (int ply = 0; ply < size * size * 8 + 100; ply++)
             {
@@ -57,16 +59,24 @@ internal static class LessonCycle
             else if (outcome == "timeout") timedOut++;
             else moveLimits++;
             repeated += repeats;
+            if (!bySize.ContainsKey(size)) bySize[size] = new int[4];
+            bySize[size][0]++;
+            bySize[size][1] += outcome == "two-passes" ? 1 : 0;
+            bySize[size][2] += outcome == "move-limit" ? 1 : 0;
+            bySize[size][3] += repeats;
             log.WriteLine(JsonSerializer.Serialize(new {
                 gameIndex, seed, size, randomOpponent, openingLength, outcome,
-                repeats, moves, lessons = board.Lessons.Reports, evidence = board.Lessons.Examples
+                repeats, moves, areaEstimate = board.Score(7.5),
+                lessons = board.Lessons.Reports, evidence = board.Lessons.Examples
             }));
             if (outcome == "timeout") break;
         }
         var summary = new {
             version = 1, seed, requestedGames = games, completed, moveLimits, timedOut,
             repeatedPositions = repeated, elapsedSeconds = timer.Elapsed.TotalSeconds,
-            engineVersion = "0.2.0", note = "Convergence observations only; not a strength or win-rate evaluation."
+            byBoardSize = bySize.Select(pair => new { size = pair.Key, games = pair.Value[0], completed = pair.Value[1], moveLimits = pair.Value[2], repeats = pair.Value[3] }),
+            engineVersion = "0.2.0", rules = "Chinese area scoring, simple ko; no automatic dead-stone adjudication",
+            komi = 7.5, note = "Convergence observations only; area estimates assume remaining stones alive. Not a strength or win-rate evaluation."
         };
         string json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(Path.Combine(directory, "summary.json"), json);

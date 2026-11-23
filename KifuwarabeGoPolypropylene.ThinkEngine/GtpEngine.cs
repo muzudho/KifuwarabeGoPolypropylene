@@ -4,7 +4,8 @@ namespace KifuwarabeGoPolypropylene.ThinkEngine;
 public sealed class GtpEngine
 {
     private const string Columns = "ABCDEFGHJKLMNOPQRST";
-    private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "showboard", "kfw-lessons", "quit"];
+    private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "showboard", "final_score", "kfw-lessons", "quit"];
+    private double komi;
     private readonly BattleLessons lessons = new();
     private Board board = new(19);
     public GtpEngine() { board = new Board(19) { Lessons = lessons }; }
@@ -38,6 +39,9 @@ public sealed class GtpEngine
             case "name": return "KifuwarabeGoPolypropylene";
             case "version": return "0.2.0";
             case "kfw-lessons": return System.Text.Json.JsonSerializer.Serialize(board.Lessons.Reports);
+            case "final_score":
+                if (!board.IsFinished) throw new ArgumentException("game not finished; play out disputed stones and pass twice");
+                return board.Score(komi).Result;
             case "known_command": return Commands.Contains(args[0]) ? "true" : "false";
             case "list_commands": return string.Join('\n', Commands);
             case "boardsize":
@@ -45,8 +49,8 @@ public sealed class GtpEngine
                 board = new Board(size) { Lessons = lessons }; return "";
             case "clear_board": board = new Board(board.Size) { Lessons = lessons }; return "";
             case "komi":
-                if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double komi) || !double.IsFinite(komi)) throw new ArgumentException("invalid komi");
-                // 評価関数・得点計算は未実装。コミは着手に影響しない。
+                if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double value) || !double.IsFinite(value)) throw new ArgumentException("invalid komi");
+                komi = value;
                 return "";
             case "play":
                 if (!board.Play(Color(args[0]), ParseVertex(args[1]))) throw new ArgumentException("illegal move");

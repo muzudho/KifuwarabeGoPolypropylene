@@ -4,7 +4,7 @@ param(
     [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
     [ValidateRange(1, 10000)][int]$Games = 32,
     [int]$Seed = 1,
-    [string]$ArtifactRoot = 'Z:\muzudho-with-ai-agent\KifuwarabeGoPolypropylene\tmp\delete-after-2026-12-23\lesson-cycle'
+    [string]$ArtifactRoot = ('Z:\muzudho-with-ai-agent\KifuwarabeGoPolypropylene\tmp\delete-after-' + (Get-Date).AddDays(7).ToString('yyyy-MM-dd') + '\lesson-cycle')
 )
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path $PSScriptRoot -Parent

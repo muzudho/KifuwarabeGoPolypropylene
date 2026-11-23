@@ -76,6 +76,20 @@ internal static class SelfTest
             Console.WriteLine($"Self-play {size}x{size}: {moves} moves, {game.Lessons.Reports.Sum(r => r.Avoided)} avoided");
         }
         Check(Exchange("kfw-lessons\n").Contains("[]"), "GTP lesson reports");
+        var empty = new Board(9);
+        Check(empty.Score(7.5) == new AreaScore(0, 0, 81, 7.5), "empty board is neutral");
+        Check(empty.Score(7.5).Result == "W+7.5", "white komi");
+        var area = new Board(3);
+        foreach (int p in new[] { 1, 3, 5, 7 }) Check(area.Play(1, p), "area setup");
+        Check(area.Score(0) == new AreaScore(9, 0, 0, 0), "stones plus surrounded empties");
+        Check(area.Score(9).Result == "0", "draw");
+        var mixed = new Board(3);
+        Check(mixed.Play(1, 0) && mixed.Play(2, 8), "neutral setup");
+        Check(mixed.Score(0) == new AreaScore(1, 1, 7, 0), "mixed boundary neutral");
+        Check(mixed.Play(1, null) && mixed.Play(2, null) && mixed.IsFinished, "two passes finish");
+        Check(mixed.Play(1, 1) && !mixed.IsFinished, "dispute can resume play");
+        Check(Exchange("boardsize 9\nkomi 7.5\nplay b pass\nplay w pass\nfinal_score\n").EndsWith("= W+7.5\n\n"), "GTP Chinese area and komi");
+        Check(Exchange("final_score\n").StartsWith("? game not finished"), "no final score before passes");
         Console.WriteLine($"PASS: {count} checks");
     }
 }

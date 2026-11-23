@@ -12,6 +12,35 @@ public sealed class Board(int size)
     private Board Copy() => new(Size) { cells = (int[])cells.Clone(), previous = previous };
     public int At(int x, int y) => cells[y * Size + x];
     public string PositionKey => Key(cells);
+    public int ConsecutivePasses { get; private set; }
+    public bool IsFinished => ConsecutivePasses >= 2;
+
+    // 中国式の面積計算。盤上に残る石を生き石として扱い、混在境界の空点は中立。
+    // 死石の自動判定・合意による除去は未実装。争いがあれば打ち続けて解消する。
+    public AreaScore Score(double komi)
+    {
+        if (!double.IsFinite(komi)) throw new ArgumentException("invalid komi");
+        int black = cells.Count(c => c == 1), white = cells.Count(c => c == 2), neutral = 0;
+        var visited = new HashSet<int>();
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != 0 || !visited.Add(p)) continue;
+            var pending = new Stack<int>();
+            pending.Push(p);
+            int count = 0, boundary = 0;
+            while (pending.TryPop(out int q))
+            {
+                count++;
+                foreach (int n in Neighbors(q))
+                    if (cells[n] == 0) { if (visited.Add(n)) pending.Push(n); }
+                    else boundary |= cells[n];
+            }
+            if (boundary == 1) black += count;
+            else if (boundary == 2) white += count;
+            else neutral += count;
+        }
+        return new(black, white, neutral, komi);
+    }
     private IEnumerable<int> Neighbors(int p)
     {
         if (p % Size > 0) yield return p - 1;
@@ -36,7 +65,7 @@ public sealed class Board(int size)
     public bool Play(int color, int? point)
     {
         if (color is not (1 or 2)) return false;
-        if (point is null) { previous = (int[])cells.Clone(); return true; }
+        if (point is null) { previous = (int[])cells.Clone(); ConsecutivePasses++; return true; }
         int p = point.Value;
         if (p < 0 || p >= cells.Length || cells[p] != 0) return false;
         var next = (int[])cells.Clone();
@@ -51,6 +80,7 @@ public sealed class Board(int size)
         if (!Group(next, p).liberty || (previous is not null && next.SequenceEqual(previous))) return false;
         previous = cells;
         cells = next;
+        ConsecutivePasses = 0;
         history.Add(Key(cells));
         return true;
     }

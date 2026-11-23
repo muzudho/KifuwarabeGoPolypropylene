@@ -4,8 +4,10 @@ namespace KifuwarabeGoPolypropylene.ThinkEngine;
 public sealed class GtpEngine
 {
     private const string Columns = "ABCDEFGHJKLMNOPQRST";
-    private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "showboard", "quit"];
+    private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "showboard", "kfw-lessons", "quit"];
+    private readonly BattleLessons lessons = new();
     private Board board = new(19);
+    public GtpEngine() { board = new Board(19) { Lessons = lessons }; }
     public void Run(TextReader input, TextWriter output)
     {
         while (input.ReadLine() is { } line)
@@ -34,13 +36,14 @@ public sealed class GtpEngine
         {
             case "protocol_version": return "2";
             case "name": return "KifuwarabeGoPolypropylene";
-            case "version": return "0.1.0";
+            case "version": return "0.2.0";
+            case "kfw-lessons": return System.Text.Json.JsonSerializer.Serialize(board.Lessons.Reports);
             case "known_command": return Commands.Contains(args[0]) ? "true" : "false";
             case "list_commands": return string.Join('\n', Commands);
             case "boardsize":
                 if (!int.TryParse(args[0], out int size) || size < 2 || size > 19) throw new ArgumentException("unacceptable size");
-                board = new Board(size); return "";
-            case "clear_board": board = new Board(board.Size); return "";
+                board = new Board(size) { Lessons = lessons }; return "";
+            case "clear_board": board = new Board(board.Size) { Lessons = lessons }; return "";
             case "komi":
                 if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double komi) || !double.IsFinite(komi)) throw new ArgumentException("invalid komi");
                 // 評価関数・得点計算は未実装。コミは着手に影響しない。

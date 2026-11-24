@@ -65,7 +65,9 @@ internal static class SelfTest
         Check(twoPieces.HasTwoEyes(1, 2), "two independent two-point regions are eyes without filling");
         Check(twoPieces.ProtectedTerritoryOwners()[0] == 1 && twoPieces.ProtectedTerritoryOwners()[3] == 1,
             "preserve multi-point pieces as land");
+        Check(twoPieces.UnconfirmedStoneCount(1) == 0, "two pieces confirm chain without filling");
         Check(twoPieces.Play(2, 0) && !twoPieces.HasTwoEyes(1, 2), "invaded piece is unsettled, not automatically alive or dead");
+        Check(twoPieces.UnconfirmedStoneCount(1) == 8 && twoPieces.UnconfirmedStoneCount(2) == 1, "invasion reports unknown, not dead");
         var onePiece = new Board(9);
         foreach (int p in new[] { 5, 9, 10, 11, 12, 13, 14 }) onePiece.Play(1, p);
         Check(!onePiece.HasTwoEyes(1, 5), "one connected multi-point region is not two eyes");
@@ -79,6 +81,7 @@ internal static class SelfTest
         foreach (int p in new[] { 1, 9, 10, 7, 17, 16 }) Check(separateEyes.Play(1, p), "tactic#1 separate groups setup");
         Check(!separateEyes.HasTwoEyes(1, 1) && !separateEyes.HasTwoEyes(1, 7), "tactic#1 never sum eyes of separate chains");
         Check(!separateEyes.HasTwoEyes(1, -1) && !separateEyes.HasTwoEyes(1, 81) && !separateEyes.HasTwoEyes(2, 1), "tactic#1 invalid or wrong stone rejected");
+        Check(new Board(9).TacticApplications.Count == 0, "tactic log starts empty");
         Check(new Board(9).FindTwoEyeCompletingMoves(1).Count == 0, "tactic#1 no one-move two eyes on empty board");
         var finishedTactic = new Board(3);
         for (int ply = 0; ply < Board.MoveLimit; ply++) finishedTactic.Play(ply % 2 + 1, null);
@@ -214,6 +217,213 @@ internal static class SelfTest
         while (lastPlyCapture.MoveCount < 399) lastPlyCapture.Play(1, null);
         Check(lastPlyCapture.Play(1, 79) && lastPlyCapture.StonesLostToImmediateReply(1, 79) == 0, "400th capture has no 401st reply");
         Check(board.StonesLostToImmediateReply(1, 3) == 0, "safe capture not treated as losing capture");
+        // 戦術#4: SEED2026112499 game0、従来101手目にパスした局面。
+        Board SnapbackPosition()
+        {
+            var b = new Board(9); int ply = 0;
+            foreach (string v in "0,1,2,3,4,5,6,7,9,8,10,11,1,12,13,14,15,16,18,17,19,20,21,22,23,4,24,13,25,27,26,7,16,28,0,1,8,9,19,10,29,18,30,31,32,33,34,36,35,37,38,39,40,41,42,43,33,44,45,46,47,48,49,50,51,52,54,53,55,56,29,21,38,30,57,47,58,59,60,61,63,62,64,65,66,67,68,50,41,69,59,70,73,71,74,76,75,78,77,-".Split(','))
+                Check(b.Play(ply++ % 2 + 1, v == "-" ? null : int.Parse(v)), "snapback replay");
+            return b;
+        }
+        var snapback = SnapbackPosition();
+        int? continued = snapback.Generate(1);
+        Check(continued == 79, "tactic#4 continues with safe snapback instead of pass");
+        Check(snapback.TacticApplications.Count == 1 && snapback.TacticApplications[0] == new TacticApplication("resolve-before-pass", 101, 1, 79),
+            "tactic#4 records actual application with move and point");
+        int blackBefore = snapback.CountStones().Black;
+        Check(snapback.Play(2, 80) && snapback.CountStones().Black == blackBefore - 1, "snapback sacrifices one stone");
+        int whiteBefore = snapback.CountStones().White;
+        Check(snapback.Generate(1) == 79 && snapback.CountStones().White == whiteBefore - 11, "snapback generator actually recaptures eleven stones");
+        Check(snapback.StonesLostToImmediateReply(1, 79) == 0, "snapback recapture is not immediately lost");
+        var ignoredSnapback = SnapbackPosition();
+        Check(ignoredSnapback.Generate(1) == 79 && ignoredSnapback.Play(2, null), "snapback opponent declines capture");
+        int ignoredWhite = ignoredSnapback.CountStones().White;
+        Check(ignoredSnapback.Generate(1) == 80 && ignoredSnapback.CountStones().White < ignoredWhite, "snapback still captures when opponent passes");
+        var repeatedSnapback = SnapbackPosition();
+        Check(repeatedSnapback.Play(1, 79) && !repeatedSnapback.HasSafeSnapback(1, 79, new HashSet<string> { snapback.PositionKey }), "snapback respects repeated-position policy");
+        var noTimeSnapback = SnapbackPosition();
+        while (noTimeSnapback.MoveCount < 398) noTimeSnapback.Play(2, null);
+        Check(noTimeSnapback.Play(1, 79) && !noTimeSnapback.HasSafeSnapback(1, 79, new HashSet<string>()), "no nonexistent recapture beyond 400 plies");
+        var loneSacrifice = new Board(3);
+        Check(loneSacrifice.Play(1, 0) && loneSacrifice.Play(2, 1), "legal losing sacrifice setup");
+        Check(!loneSacrifice.HasSafeSnapback(1, 0, new HashSet<string>()), "ordinary losing sacrifice is not snapback");
+        // 第二の観測例: SEED2026112550 game10、87手目。黒白を反転しても検証する。
+        foreach (bool swap in new[] { false, true })
+        {
+            var secondSnap = new Board(9); int ply = 0;
+            foreach (string v in "0,63,1,25,2,80,3,12,4,68,5,26,6,27,7,19,8,70,9,59,10,39,11,72,13,40,14,33,15,76,16,44,17,35,18,67,20,51,21,36,22,62,23,78,24,60,28,42,29,75,30,73,31,48,32,53,37,74,38,56,41,69,43,55,45,65,27,77,46,49,47,58,50,34,54,61,-,71,-,79,-,52,-,43,-,64".Split(','))
+            {
+                int c = ply++ % 2 + 1;
+                Check(secondSnap.Play(swap ? 3 - c : c, v == "-" ? null : int.Parse(v)), "second snapback replay");
+            }
+            int color = swap ? 2 : 1;
+            Check(secondSnap.Generate(color) == 57, "second snapback selected for both colors");
+            int ownBefore = color == 1 ? secondSnap.CountStones().Black : secondSnap.CountStones().White;
+            Check(secondSnap.Play(3 - color, 66), "second snapback legal opponent capture");
+            int ownAfter = color == 1 ? secondSnap.CountStones().Black : secondSnap.CountStones().White;
+            Check(ownBefore - ownAfter == 1, "second snapback loses exactly one");
+            int enemyBefore = color == 1 ? secondSnap.CountStones().White : secondSnap.CountStones().Black;
+            Check(secondSnap.Generate(color) == 57, "second snapback actual generator recaptures");
+            int enemyAfter = color == 1 ? secondSnap.CountStones().White : secondSnap.CountStones().Black;
+            Check(enemyBefore - enemyAfter == 40, "second snapback captures forty after one-stone sacrifice");
+            Check(secondSnap.TacticApplications.Count == 1 && secondSnap.TacticApplications[0].Color == color,
+                "second snapback log belongs to actual color");
+        }
+        // 戦術#3研究用の狭い侵入: 3点の隅領域と、別の2つの眼を持つ壁。
+        foreach (int invader in new[] { 0, 1, 2 })
+        {
+            var pocket = new Board(9);
+            foreach (int p in new[] { 3, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16 })
+                Check(pocket.Play(1, p), "invasion pocket living wall setup");
+            Check(pocket.HasTwoEyes(1, 3), "invasion pocket wall has independent eyes");
+            Check(pocket.Play(2, invader), "invasion pocket legal invasion");
+            Check(pocket.ProtectedTerritoryOwners()[1 == invader ? 0 : 1] == 0, "invaded region reopens for defense");
+            int? defense = pocket.Generate(1);
+            Check(defense == (invader == 1 ? 0 : 1), "existing policy finds local defense in corner pocket");
+            Check(pocket.HasTwoEyes(1, 3), "defense does not destroy wall life");
+            if (invader == 1)
+            {
+                Check(!pocket.Play(2, 2), "intruder cannot extend into last liberty after boundary defense");
+                Check(pocket.Play(2, null) && pocket.Generate(1) == 2, "continue to actual capture after opponent pass");
+            }
+            Check(pocket.CountStones().White == 0 && pocket.BlackPrisoners == 1, "pocket invasion resolved by actual capture, not dead label");
+        }
+        var unconfirmedWall = new Board(9);
+        foreach (int p in new[] { 3, 9, 10, 11, 12 }) unconfirmedWall.Play(1, p);
+        Check(unconfirmedWall.Play(2, 2) && !unconfirmedWall.HasTwoEyes(1, 3), "invasion defense uncertain wall setup");
+        unconfirmedWall.Generate(1);
+        Check(unconfirmedWall.TacticApplications.All(t => t.Id != "minimum-invasion-defense"), "uncertain wall does not trigger invasion priority");
+        foreach (int color in new[] { 1, 2 })
+        {
+            var defense = new Board(9);
+            foreach (int p in new[] { 3, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16 }) defense.Play(color, p);
+            Check(defense.Play(3 - color, 2) && defense.Generate(color) == 1, "one-move invasion capture for either color");
+            Check(defense.TacticApplications.Any(t => t.Id == "minimum-invasion-defense" && t.Color == color && t.Point == 1), "invasion defense real application recorded");
+        }
+        // 戦術#5: 19路で1石取りを急ぎ、別の7石を失った実戦局面。
+        var rescueBoard = new Board(19); int rescuePly = 0;
+        foreach (string v in "18,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,38,37,39,40,1,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,57,56,58,59,60,61,23,4,62,42,63,64,65,66,67,68,69,70,71,72,73,74,76,75,77,78,79,80,81,82,83,26,7,84,45,85,64,86,29,10,87,48,88,89,90,91,92,93,95,94,96,97,98,99,100,101,102,103,104,105,106,123,107,108,109,110,111,112,114,113,115,116,117,118,119,120,121,122,124,125,126,127,128,129,130,131,133,132,134,135,136,137,138,139,140,141,142,143,144,124,145".Split(','))
+            Check(rescueBoard.Play(rescuePly++ % 2 + 1, v == "-" ? null : int.Parse(v)), "atari rescue replay");
+        int? rescue = rescueBoard.Generate(1);
+        Check(rescue == 146 || rescue == 147, "save seven stones before unrelated one-stone capture");
+        Check(rescueBoard.TacticApplications.Any(t => t.Id == "rescue-atari-chain"), "record actual atari rescue");
+        if (rescue == 147) Check(rescueBoard.Play(2, 146), "recorded threat reply after capture rescue");
+        foreach (int victim in new[] { 13, 32, 51, 70, 89, 108, 127 })
+            Check(rescueBoard.At(victim % 19, victim / 19) == 1, "seven original stones survive immediate reply");
+        var simpleRescue = new Board(3);
+        foreach (int p in new[] { 0, 1 }) Check(simpleRescue.Play(1, p), "simple rescue black setup");
+        foreach (int p in new[] { 2, 3 }) Check(simpleRescue.Play(2, p), "simple rescue white setup");
+        Check(simpleRescue.Generate(1) == 4 && simpleRescue.TacticApplications.Any(t => t.Id == "rescue-atari-chain"), "safe extension rescues two stones");
+        var noRescue = new Board(3);
+        foreach (int p in new[] { 0, 1 }) Check(noRescue.Play(1, p), "no-rescue black setup");
+        foreach (int p in new[] { 2, 3, 5, 7 }) Check(noRescue.Play(2, p), "no-rescue white setup");
+        Check(!noRescue.Play(1, 4), "suicidal rescue is illegal");
+        noRescue.Generate(1);
+        Check(noRescue.TacticApplications.All(t => t.Id != "rescue-atari-chain"), "do not claim rescue when no safe candidate exists");
+        // 戦術#6は候補抽出だけ。着手優先は比較後に判断する。
+        foreach (int owner in new[] { 1, 2 })
+        {
+            var denial = new Board(19);
+            for (int y = 3; y <= 15; y++)
+                for (int x = 3; x <= 15; x++)
+                {
+                    if (x >= 5 && x <= 13 && y >= 5 && y <= 13 || y == 4 && (x == 4 || x == 14)) continue;
+                    Check(denial.Play(owner, y * 19 + x), "denial wall setup");
+                }
+            int[] invasion = { 160, 161, 162, 163, 164, 179, 181, 183, 198, 199, 200 };
+            for (int i = 0; i < invasion.Length; i++)
+            {
+                Check(denial.Play(3 - owner, invasion[i]), "denial invasion setup");
+                if (i < 10) denial.Generate(owner);
+            }
+            string keyBefore = denial.PositionKey; int plyBefore = denial.MoveCount;
+            Check(denial.FindTwoEyeDenialMoves(owner).SequenceEqual(new[] { 201 }), "unique safe enclosed eye denial");
+            Check(denial.PositionKey == keyBefore && denial.MoveCount == plyBefore && denial.TacticApplications.Count == 0, "denial extraction has no game effects");
+            Check(denial.Play(owner, 201), "denial move legal");
+            Check(denial.FindTwoEyeCompletingMoves(3 - owner).Count == 0, "denial removes immediate completion");
+
+            var doubleThreat = new Board(19);
+            foreach (int p in new[] { 40,41,42,43,44,59,61,63,78,79,80,200,201,202,203,204,219,221,223,238,239,240 })
+                doubleThreat.Play(3 - owner, p);
+            Check(doubleThreat.FindTwoEyeCompletingMoves(3 - owner).Count == 2, "two independent completion threats");
+            Check(doubleThreat.FindTwoEyeDenialMoves(owner).Count == 0, "no all-threat denial from blocking one point");
+            var openThreat = new Board(19);
+            foreach (int p in new[] { 40,41,42,43,44,59,61,63,78,79,80 }) openThreat.Play(3 - owner, p);
+            Check(openThreat.FindTwoEyeDenialMoves(owner).Count == 0, "unbounded opponent shape excluded");
+        }
+        foreach (int owner in new[] { 1, 2 })
+            foreach (int rotation in Enumerable.Range(0, 4))
+                foreach (bool reflect in new[] { false, true })
+                {
+                    int TransformDenial(int p)
+                    {
+                        int x = p % 19, y = p / 19;
+                        if (reflect) x = 18 - x;
+                        for (int r = 0; r < rotation; r++) (x, y) = (18 - y, x);
+                        return y * 19 + x;
+                    }
+                    var shape = new Board(19);
+                    for (int y = 3; y <= 15; y++)
+                        for (int x = 3; x <= 15; x++)
+                        {
+                            if (x >= 5 && x <= 13 && y >= 5 && y <= 13 || y == 4 && (x == 4 || x == 14)) continue;
+                            shape.Play(owner, TransformDenial(y * 19 + x));
+                        }
+                    foreach (int p in new[] { 160,161,162,163,164,179,181,183,198,199,200 })
+                        shape.Play(3 - owner, TransformDenial(p));
+                    Check(shape.FindTwoEyeDenialMoves(owner).SequenceEqual(new[] { TransformDenial(201) }), "rotated reflected enclosed denial");
+                    Check(shape.Play(3 - owner, TransformDenial(201)), "enemy two eyes completion legal");
+                    Check(shape.HasTwoEyes(3 - owner, TransformDenial(160)), "enemy completed two eyes confirmed");
+                    Check(shape.FindTwoEyeDenialMoves(owner).Count == 0, "do not deny already completed life");
+                }
+        var endedDenial = new Board(19);
+        Check(endedDenial.Play(1, null) && endedDenial.Play(2, null), "denial two-pass terminal setup");
+        Check(endedDenial.FindTwoEyeDenialMoves(1).Count == 0, "no denial after two passes");
+        while (endedDenial.MoveCount < Board.MoveLimit) endedDenial.Play(1, null);
+        Check(endedDenial.FindTwoEyeDenialMoves(2).Count == 0, "no denial after move limit");
+        foreach (int owner in new[] { 1, 2 })
+            foreach (int rotation in Enumerable.Range(0, 4))
+            {
+                int MapSplit(int p)
+                {
+                    int x = p % 9, y = p / 9;
+                    for (int r = 0; r < rotation; r++) (x, y) = (8 - y, x);
+                    return y * 9 + x;
+                }
+                Board SplitSetup(bool invaded, bool weak, bool open = false)
+                {
+                    var b = new Board(9);
+                    int[] pocket = { 20,21,22,23,24,29,30,32,33 };
+                    for (int y = 1; y <= 6; y++)
+                        for (int x = 1; x <= 7; x++)
+                        {
+                            int p = y * 9 + x;
+                            if (pocket.Contains(p) || p is 47 or 51 || weak && p is 13 or 14 || open && p == 19) continue;
+                            b.Play(owner, MapSplit(p));
+                        }
+                    if (invaded) b.Play(3 - owner, MapSplit(20));
+                    return b;
+                }
+                var invadedSplit = SplitSetup(true, false);
+                string beforeSplit = invadedSplit.PositionKey; int movesBeforeSplit = invadedSplit.MoveCount;
+                Check(invadedSplit.FindSmallInvasionAtariMoves(owner).SequenceEqual(new[] { MapSplit(21) }), "small invasion atari preserves five empty points");
+                Check(invadedSplit.PositionKey == beforeSplit && invadedSplit.MoveCount == movesBeforeSplit && invadedSplit.TacticApplications.Count == 0, "split extraction is observational");
+                Check(SplitSetup(false, false).FindSmallInvasionAtariMoves(owner).Count == 0, "do not split uninvaded protected territory");
+                Check(SplitSetup(true, true).FindSmallInvasionAtariMoves(owner).Count == 0, "weak boundary excluded from small invasion atari");
+                Check(SplitSetup(true, false, true).FindSmallInvasionAtariMoves(owner).Count == 0, "open escape outside small region excluded");
+                var alreadyAtari = SplitSetup(true, false);
+                Check(alreadyAtari.Play(owner, MapSplit(21)), "make existing invasion atari");
+                Check(alreadyAtari.FindSmallInvasionAtariMoves(owner).Count == 0, "already atari uses capture tactic instead");
+                var doubleSplit = SplitSetup(false, false);
+                Check(doubleSplit.Play(3 - owner, MapSplit(22)), "central invasion has two liberties");
+                Check(doubleSplit.FindSmallInvasionAtariMoves(owner).SequenceEqual(new[] { MapSplit(21), MapSplit(23) }.Order()), "equal space gains use stable point order");
+
+            }
+        var endedSplit = new Board(9);
+        endedSplit.Play(1, null); endedSplit.Play(2, null);
+        Check(endedSplit.FindSmallInvasionAtariMoves(1).Count == 0, "no split after two passes");
+        while (endedSplit.MoveCount < Board.MoveLimit) endedSplit.Play(1, null);
+        Check(endedSplit.FindSmallInvasionAtariMoves(2).Count == 0, "no split after move limit");
         Console.WriteLine($"PASS: {count} checks");
     }
 }

@@ -69,13 +69,17 @@ internal static class LessonCycle
                 repeats, moves, moveCount = board.MoveCount,
                 territoryScore = outcome == "timeout" ? null : board.ScoreTerritory(0),
                 stoneCount = board.CountStones(),
-                lessons = board.Lessons.Reports, evidence = board.Lessons.Examples
+                unconfirmedBlack = board.UnconfirmedStoneCount(1),
+                unconfirmedWhite = board.UnconfirmedStoneCount(2),
+                scoreStatus = outcome == "timeout" ? "unscored" : "provisional-not-proof-of-settlement",
+                lessons = board.Lessons.Reports, evidence = board.Lessons.Examples,
+                tactics = board.TacticApplications
             }));
             if (outcome == "timeout") break;
         }
         var summary = new {
-            version = 3, seed, requestedGames = games, completed, moveLimits, timedOut,
-            adjudicatedGames = completed + moveLimits, moveLimit = Board.MoveLimit,
+            version = 4, seed, requestedGames = games, completed, moveLimits, timedOut,
+            provisionallyScoredGames = completed + moveLimits, moveLimit = Board.MoveLimit,
             repeatedPositions = repeated, elapsedSeconds = timer.Elapsed.TotalSeconds,
             byBoardSize = bySize.Select(pair => new { size = pair.Key, games = pair.Value[0], completed = pair.Value[1], moveLimits = pair.Value[2], repeats = pair.Value[3] }),
             engineVersion = "0.4.0", rules = "Pure Go Pancake: avoid own protected territory; territory plus prisoners and komi; simple ko; 400 plies",

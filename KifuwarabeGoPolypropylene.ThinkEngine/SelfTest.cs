@@ -10,6 +10,79 @@ internal static class SelfTest
             if (!ok) throw new InvalidOperationException("FAIL: " + name);
             count++;
         }
+        // 戦術#1: 完成形の認識だけを検証し、着手優先はまだ変更しない。
+        foreach (int color in new[] { 1, 2 })
+        foreach (int rotation in Enumerable.Range(0, 4))
+        foreach (bool mirror in new[] { false, true })
+        foreach (int location in Enumerable.Range(0, 3))
+        {
+            const int size = 9;
+            int Point(int x, int y)
+            {
+                if (mirror) x = size - 1 - x;
+                for (int r = 0; r < rotation; r++) (x, y) = (size - 1 - y, x);
+                return y * size + x;
+            }
+            // 隅6石、辺8石、中央11石。最小性の証明ではない。
+            (int x, int y)[] shape = location switch
+            {
+                0 => new[] { (1, 0), (3, 0), (0, 1), (1, 1), (2, 1), (3, 1) },
+                1 => new[] { (2, 0), (4, 0), (6, 0), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1) },
+                _ => new[] { (3, 2), (4, 2), (5, 2), (2, 3), (4, 3), (6, 3), (2, 4), (3, 4), (4, 4), (5, 4), (6, 4) }
+            };
+            var alive = new Board(size);
+            foreach (var (x, y) in shape) Check(alive.Play(color, Point(x, y)), "tactic#1 shape setup");
+            int first = Point(shape[0].x, shape[0].y);
+            Check(alive.HasTwoEyes(color, first), "tactic#1 same-chain two eyes across transformations");
+            (int x, int y)[] eyePoints = location switch
+            {
+                0 => new[] { (0, 0), (2, 0) },
+                1 => new[] { (3, 0), (5, 0) },
+                _ => new[] { (3, 3), (5, 3) }
+            };
+            foreach (var (x, y) in eyePoints)
+                Check(!alive.Play(3 - color, Point(x, y)), "tactic#1 opponent cannot enter either eye");
+            Check(alive.Play(color, Point(eyePoints[0].x, eyePoints[0].y)), "tactic#1 legal own-eye fill");
+            Check(!alive.HasTwoEyes(color, first), "tactic#1 one remaining eye is not two");
+            var broken = new Board(size);
+            foreach (var (x, y) in shape.Skip(1)) Check(broken.Play(color, Point(x, y)), "tactic#1 broken boundary setup");
+            Check(!broken.HasTwoEyes(color, Point(shape[^1].x, shape[^1].y)), "tactic#1 open boundary rejected");
+            string beforeCandidates = broken.PositionKey;
+            int beforeCount = broken.MoveCount;
+            var completing = broken.FindTwoEyeCompletingMoves(color);
+            Check(completing.Contains(Point(shape[0].x, shape[0].y)), "tactic#1 find missing boundary move");
+            Check(broken.PositionKey == beforeCandidates && broken.MoveCount == beforeCount && broken.Lessons.Reports.Count == 0,
+                "tactic#1 probing leaves board and reports unchanged");
+            foreach (int candidate in completing)
+            {
+                var proof = new Board(size);
+                foreach (var (x, y) in shape.Skip(1)) proof.Play(color, Point(x, y));
+                Check(proof.Play(color, candidate) && proof.HasTwoEyes(color, candidate), "tactic#1 every proposed move completes same-chain eyes");
+            }
+        }
+        var twoPieces = new Board(9);
+        foreach (int p in new[] { 2, 5, 9, 10, 11, 12, 13, 14 }) Check(twoPieces.Play(1, p), "two two-point pieces setup");
+        Check(twoPieces.HasTwoEyes(1, 2), "two independent two-point regions are eyes without filling");
+        Check(twoPieces.ProtectedTerritoryOwners()[0] == 1 && twoPieces.ProtectedTerritoryOwners()[3] == 1,
+            "preserve multi-point pieces as land");
+        Check(twoPieces.Play(2, 0) && !twoPieces.HasTwoEyes(1, 2), "invaded piece is unsettled, not automatically alive or dead");
+        var onePiece = new Board(9);
+        foreach (int p in new[] { 5, 9, 10, 11, 12, 13, 14 }) onePiece.Play(1, p);
+        Check(!onePiece.HasTwoEyes(1, 5), "one connected multi-point region is not two eyes");
+        var cornerTerritory = new Board(9);
+        foreach (int point in new[] { 1, 3, 9, 10, 11, 12 }) cornerTerritory.Play(1, point);
+        var territoryOwners = cornerTerritory.ProtectedTerritoryOwners();
+        Check(territoryOwners[0] == 1 && territoryOwners[2] == 1, "pancake protects corner eye pieces");
+        Check(territoryOwners[80] == 0, "pancake does not claim four-edge outside as protected land");
+        Check(cornerTerritory.Play(2, 80), "opponent can invade outside of alive corner");
+        var separateEyes = new Board(9);
+        foreach (int p in new[] { 1, 9, 10, 7, 17, 16 }) Check(separateEyes.Play(1, p), "tactic#1 separate groups setup");
+        Check(!separateEyes.HasTwoEyes(1, 1) && !separateEyes.HasTwoEyes(1, 7), "tactic#1 never sum eyes of separate chains");
+        Check(!separateEyes.HasTwoEyes(1, -1) && !separateEyes.HasTwoEyes(1, 81) && !separateEyes.HasTwoEyes(2, 1), "tactic#1 invalid or wrong stone rejected");
+        Check(new Board(9).FindTwoEyeCompletingMoves(1).Count == 0, "tactic#1 no one-move two eyes on empty board");
+        var finishedTactic = new Board(3);
+        for (int ply = 0; ply < Board.MoveLimit; ply++) finishedTactic.Play(ply % 2 + 1, null);
+        Check(finishedTactic.FindTwoEyeCompletingMoves(1).Count == 0, "tactic#1 no candidate after move limit");
         var board = new Board(3);
         Check(board.Play(2, 0), "place white");
         Check(board.Play(1, 1) && board.Play(1, 3) && board.At(0, 0) == 0, "capture");
@@ -39,8 +112,8 @@ internal static class SelfTest
         var eyes = new Board(3);
         foreach (int p in new[] { 1, 2, 3, 5, 6, 7, 8 }) Check(eyes.Play(1, p), "two-eye setup");
         Check(eyes.Lessons.Reports.Count == 0, "lessons initially unlearned");
-        Check(eyes.Generate(1) is not null && eyes.CountStones().Black == 8, "fallback fills eye when all legal candidates filtered");
-        Check(eyes.Lessons.Reports.Any(r => r.Id == "fill-eye" && r.Observations > 0), "automatically learn eye loss");
+        Check(eyes.Generate(1) is null && eyes.CountStones().Black == 7, "pancake passes instead of filling own two-eye territory");
+        Check(eyes.ProtectedTerritoryOwners()[0] == 1 && eyes.ProtectedTerritoryOwners()[4] == 1, "pancake protects both own eyes");
         Check(eyes.Generate(1) is null, "pass only when no legal move remains");
         var externalEye = new Board(3);
         foreach (int p in new[] { 1, 2, 3, 5, 6, 7, 8 }) externalEye.Play(1, p);
@@ -90,11 +163,25 @@ internal static class SelfTest
         Check(mixed.Score(0) == new AreaScore(1, 1, 7, 0), "mixed boundary neutral");
         Check(mixed.Play(1, null) && mixed.Play(2, null) && mixed.IsFinished, "two passes finish");
         Check(mixed.Play(1, 1) && !mixed.IsFinished, "dispute can resume play");
-        Check(Exchange("boardsize 9\nkomi 7.5\nplay b pass\nplay w pass\nfinal_score\n").EndsWith("= 0\n\n"), "stone rule ignores komi and empty points");
+        Check(Exchange("boardsize 9\nkomi 7.5\nplay b pass\nplay w pass\nfinal_score\n").EndsWith("= W+7.5\n\n"), "territory rule counts komi");
         Check(Exchange("final_score\n").StartsWith("? game not finished"), "no final score before passes");
         Check(area.CountStones() == new StoneScore(4, 0), "count stones instead of territory");
         Check(board.CountStones() == new StoneScore(2, 0), "captured stones not counted");
         Check(new StoneScore(2, 3).Result == "W+1" && new StoneScore(3, 2).Result == "B+1" && new StoneScore(2, 2).Result == "0", "stone wins and draw");
+        Check(board.BlackPrisoners == 1 && board.WhitePrisoners == 0, "capture increments prisoners");
+        Check(area.ScoreTerritory(0).BlackTerritory == 5, "territory excludes stones");
+        Check(new TerritoryScore(4, 3, 2, 1, 0.5).Result == "B+1.5", "territory prisoners and komi");
+        Check(new Board(9).ProtectedTerritoryOwners().All(c => c == 0), "empty board not territory");
+        Check(eyes.Play(1, 0), "policy permits external legal play");
+        Check(Exchange("boardsize 9\nkomi 2.5\nclear_board\nplay b pass\nplay w pass\nfinal_score\n").EndsWith("= W+2.5\n\n"), "clear preserves komi");
+        var mixedRegion = new Board(5);
+        mixedRegion.Play(1, 0); mixedRegion.Play(2, 24);
+        Check(mixedRegion.ProtectedTerritoryOwners().All(c => c == 0), "mixed boundary not own territory");
+        var resetCapture = new Board(3);
+        resetCapture.Play(2, 0); resetCapture.Play(1, 1); resetCapture.Play(1, 3);
+        int capturedBeforeIllegal = resetCapture.BlackPrisoners;
+        Check(!resetCapture.Play(2, 0) && resetCapture.BlackPrisoners == capturedBeforeIllegal, "suicide leaves prisoners unchanged");
+        Check(new Board(3).BlackPrisoners == 0 && new Board(3).WhitePrisoners == 0, "new board resets prisoners");
         var limit = new Board(9);
         for (int ply = 0; ply < 398; ply++) Check(limit.Play(ply % 2 + 1, null), "count pass");
         Check(!limit.Play(1, -1) && limit.MoveCount == 398, "illegal move not counted");
@@ -103,7 +190,7 @@ internal static class SelfTest
         string finalPosition = limit.PositionKey;
         Check(limit.Generate(1) is null && !limit.Play(1, 2) && !limit.Play(1, null) && limit.MoveCount == 400 && limit.PositionKey == finalPosition, "400-ply board frozen");
         string atLimit = string.Concat(Enumerable.Repeat("play b pass\n", 399)) + "play b A1\nfinal_score\nplay w B1\ngenmove w\n";
-        Check(Exchange(atLimit).EndsWith("= B+1\n\n? game finished at 400 moves\n\n= pass\n\n"), "GTP adjudicates 400th position");
+        Check(Exchange(atLimit).EndsWith("= B+360\n\n? game finished at 400 moves\n\n= pass\n\n"), "GTP provisional territory at 400th position");
         Check(Exchange(atLimit + "clear_board\nplay b A1\n").EndsWith("=\n\n=\n\n"), "clear resets move limit");
         // SEED2026112321 / game0 の290手目直後。H9で1石取り、H8で11石失う。
         const string reversalMoves = "0,1,2,3,4,5,6,7,9,8,10,11,1,12,13,14,15,16,18,17,19,20,21,22,23,4,24,13,25,27,26,7,16,28,0,1,8,9,19,10,29,18,30,31,32,33,34,36,35,37,38,39,40,41,42,43,33,44,45,46,47,48,49,50,51,52,54,53,55,56,29,21,38,30,57,47,58,29,59,60,41,61,63,62,64,65,66,67,68,69,70,71,73,74,75,72,54,45,55,63,76,64,77,54,78,79,7,0,17,2,50,67,6,7,15,8,16,23,17,24,7,25,26,32,33,34,40,35,41,8,6,7,16,15,42,6,49,17,50,51,57,58,68,59,40,33,41,42,75,49,76,50,77,40,66,78,66,57,76,68,75,77,75,66,-,76,-,16,-,19,-,26,-,38,-,41,-,55,-,70,-,73,-,75,80,0,1,2,3,4,5,6,7,9,8,10,11,1,12,13,14,15,16,18,17,19,20,21,22,23,4,24,13,25,27,26,7,16,28,0,1,8,9,19,10,29,18,30,31,32,33,34,36,35,37,38,39,40,41,42,43,33,44,45,46,47,48,49,50,51,52,54,53,55,56,29,21,38,30,57,47,58,29,59,60,41,61,63,62,64,65,66,67,68,69,70,71,73,74,75,72,54,45,55,63,76,64,77,54,78";
@@ -122,7 +209,7 @@ internal static class SelfTest
         int beforeRecapture = original.CountStones().Black;
         Check(original.Play(2, 70) && original.CountStones().Black == beforeRecapture - 11, "reproduced eleven-stone loss");
         var avoided = ReplayReversal();
-        Check(avoided.Generate(1) != 79 && avoided.Lessons.Reports.Any(r => r.Id == "capture-reversal"), "learn and avoid losing capture");
+        Check(avoided.Generate(1) != 79, "pancake policy avoids reproduced losing capture");
         var lastPlyCapture = ReplayReversal();
         while (lastPlyCapture.MoveCount < 399) lastPlyCapture.Play(1, null);
         Check(lastPlyCapture.Play(1, 79) && lastPlyCapture.StonesLostToImmediateReply(1, 79) == 0, "400th capture has no 401st reply");

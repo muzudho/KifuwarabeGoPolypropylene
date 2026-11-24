@@ -67,18 +67,19 @@ internal static class LessonCycle
             log.WriteLine(JsonSerializer.Serialize(new {
                 gameIndex, seed, size, randomOpponent, openingLength, outcome,
                 repeats, moves, moveCount = board.MoveCount,
-                stoneScore = outcome == "timeout" ? null : board.CountStones(),
+                territoryScore = outcome == "timeout" ? null : board.ScoreTerritory(0),
+                stoneCount = board.CountStones(),
                 lessons = board.Lessons.Reports, evidence = board.Lessons.Examples
             }));
             if (outcome == "timeout") break;
         }
         var summary = new {
-            version = 2, seed, requestedGames = games, completed, moveLimits, timedOut,
+            version = 3, seed, requestedGames = games, completed, moveLimits, timedOut,
             adjudicatedGames = completed + moveLimits, moveLimit = Board.MoveLimit,
             repeatedPositions = repeated, elapsedSeconds = timer.Elapsed.TotalSeconds,
             byBoardSize = bySize.Select(pair => new { size = pair.Key, games = pair.Value[0], completed = pair.Value[1], moveLimits = pair.Value[2], repeats = pair.Value[3] }),
-            engineVersion = "0.3.1", rules = "User-defined on-board stone counting, simple ko, 400 total plies including passes",
-            komi = 0, note = "Two passes or 400 plies: adjudicate by on-board stones only. Timeout is not adjudicated. Not standard Chinese area scoring or a tournament strength evaluation."
+            engineVersion = "0.4.0", rules = "Pure Go Pancake: avoid own protected territory; territory plus prisoners and komi; simple ko; 400 plies",
+            komi = 0, note = "Two passes or 400 plies: provisional territory score. Dead-stone removal and seki adjudication are not implemented. Not full Japanese rules. Timeout is not adjudicated."
         };
         string json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(Path.Combine(directory, "summary.json"), json);

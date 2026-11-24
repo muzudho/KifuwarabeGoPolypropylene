@@ -10,11 +10,13 @@ public sealed class Board(int size)
     public BattleLessons Lessons { get; init; } = new();
     private readonly Dictionary<string, string> failedCandidates = new();
     private static string Key(int[] position) => string.Concat(position.Select(c => (char)('0' + c)));
-    private Board Copy() => new(Size) { cells = (int[])cells.Clone(), previous = previous, MoveCount = MoveCount, ConsecutivePasses = ConsecutivePasses };
+    private Board Copy() => new(Size) { cells = (int[])cells.Clone(), previous = previous, MoveCount = MoveCount, ConsecutivePasses = ConsecutivePasses, BlackPrisoners = BlackPrisoners, WhitePrisoners = WhitePrisoners };
     public int At(int x, int y) => cells[y * Size + x];
     public string PositionKey => Key(cells);
     public int ConsecutivePasses { get; private set; }
     public int MoveCount { get; private set; }
+    public int BlackPrisoners { get; private set; }
+    public int WhitePrisoners { get; private set; }
     public bool ReachedMoveLimit => MoveCount >= MoveLimit;
     public bool IsFinished => ConsecutivePasses >= 2 || ReachedMoveLimit;
     public StoneScore CountStones() => new(cells.Count(c => c == 1), cells.Count(c => c == 2));
@@ -82,6 +84,8 @@ public sealed class Board(int size)
                     foreach (int captured in group.stones) next[captured] = 0;
             }
         if (!Group(next, p).liberty || (previous is not null && next.SequenceEqual(previous))) return false;
+        int capturedCount = cells.Count(c => c == 3 - color) - next.Count(c => c == 3 - color);
+        if (color == 1) BlackPrisoners += capturedCount; else WhitePrisoners += capturedCount;
         previous = cells;
         cells = next;
         ConsecutivePasses = 0;
@@ -89,6 +93,104 @@ public sealed class Board(int size)
         history.Add(Key(cells));
         return true;
     }
+    // 戦術#1: 同じ連で囲む独立領域が二つあり、各空点がその連の呼吸点である保守的な生き判定。
+    // false は死石を意味しない。この条件を満たさない広い眼やセキはこの判定の対象外。
+    public bool HasTwoEyes(int color, int stone)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        if (stone < 0 || stone >= cells.Length || cells[stone] != color) return false;
+        var stones = Group(cells, stone).stones;
+        var visited = new HashSet<int>();
+        int eyes = 0;
+        foreach (int liberty in stones.SelectMany(Neighbors).Where(p => cells[p] == 0).Distinct())
+        {
+            if (!visited.Add(liberty)) continue;
+            var pending = new Stack<int>(); pending.Push(liberty);
+            bool enclosed = true, vital = true;
+            while (pending.TryPop(out int q))
+            {
+                var neighbors = Neighbors(q).ToArray();
+                if (!neighbors.Any(stones.Contains)) vital = false;
+                foreach (int n in neighbors)
+                    if (cells[n] == 0) { if (visited.Add(n)) pending.Push(n); }
+                    else if (!stones.Contains(n)) enclosed = false;
+            }
+            // 独立した領域を数える。同じ一領域内の空点を複数の眼と数えない。
+            if (enclosed && vital && ++eyes >= 2) return true;
+        }
+        return false;
+    }
+    // 戦術#1候補。一手で完成する二眼を調べる。まだ着手選択には適用しない。
+    public IReadOnlyList<int> FindTwoEyeCompletingMoves(int color)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        var result = new List<int>();
+        if (ReachedMoveLimit) return result;
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != 0) continue;
+            // 既に生きている連を延ばしただけの手は「完成」に数えない。
+            if (Neighbors(p).Any(n => cells[n] == color && HasTwoEyes(color, n))) continue;
+            var trial = Copy();
+            if (trial.Play(color, p) && !history.Contains(trial.PositionKey) && trial.HasTwoEyes(color, p))
+                result.Add(p);
+        }
+        return result;
+    }
+    // 純碁ホットケーキ: 境界が同色の二眼確認済み連だけから成る空点のピース。
+    // 大領域への侵入・死石・セキの完全な証明ではなく、着手方針用の認識。
+    public int[] ProtectedTerritoryOwners()
+    {
+        var owners = new int[cells.Length];
+        var visited = new HashSet<int>();
+        var alive = new Dictionary<int, bool>();
+        bool Alive(int p)
+        {
+            if (!alive.TryGetValue(p, out bool value))
+            {
+                value = HasTwoEyes(cells[p], p);
+                foreach (int stone in Group(cells, p).stones) alive[stone] = value;
+            }
+            return value;
+        }
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != 0 || !visited.Add(p)) continue;
+            var region = new List<int>();
+            var boundary = new HashSet<int>();
+            var pending = new Stack<int>(); pending.Push(p);
+            while (pending.TryPop(out int q))
+            {
+                region.Add(q);
+                foreach (int n in Neighbors(q))
+                    if (cells[n] == 0) { if (visited.Add(n)) pending.Push(n); }
+                    else boundary.Add(n);
+            }
+            // 四辺すべてへ通じる外側は、石の壁で切り出した地としない。
+            int edges = 0;
+            foreach (int q in region)
+            {
+                if (q % Size == 0) edges |= 1;
+                if (q % Size == Size - 1) edges |= 2;
+                if (q < Size) edges |= 4;
+                if (q >= cells.Length - Size) edges |= 8;
+            }
+            if (boundary.Count == 0 || edges == 15) continue;
+            int color = cells[boundary.First()];
+            if (boundary.All(n => cells[n] == color && Alive(n)))
+                foreach (int q in region) owners[q] = color;
+        }
+        return owners;
+    }
+    // 地+アゲハマ+コミ。死石除去・セキの合意処理は未実装の暫定集計。
+    public TerritoryScore ScoreTerritory(double komi)
+    {
+        var area = Score(komi);
+        var stones = CountStones();
+        return new(area.Black - stones.Black, area.White - stones.White,
+            BlackPrisoners, WhitePrisoners, komi);
+    }
+
     private bool IsEye(int color, int p)
     {
         if (cells[p] != 0 || Neighbors(p).Any(n => cells[n] != color)) return false;
@@ -107,12 +209,12 @@ public sealed class Board(int size)
     {
         if (color is not (1 or 2)) throw new ArgumentException("invalid color");
         if (ReachedMoveLimit) return null;
-        int? fallback = null;
+        var protectedOwners = ProtectedTerritoryOwners();
         for (int p = 0; p < cells.Length; p++)
         {
+            if (protectedOwners[p] == color) continue;
             var trial = Copy();
             if (!trial.Play(color, p)) continue;
-            fallback ??= p;
             string experience = $"{Key(cells)}:{(previous is null ? "" : Key(previous))}:{color}:{p}";
             if (failedCandidates.TryGetValue(experience, out string? learned))
             {
@@ -152,12 +254,7 @@ public sealed class Board(int size)
             Play(color, p);
             return p;
         }
-        // 純碁風の研究ルール: 合法手が残る限り、戦訓だけを理由にパスしない。
-        if (fallback is int legal)
-        {
-            Play(color, legal);
-            return legal;
-        }
+        // 自分の地は候補とフォールバックから除外する。残りの合法手がなければパス。
         Play(color, null);
         return null;
     }

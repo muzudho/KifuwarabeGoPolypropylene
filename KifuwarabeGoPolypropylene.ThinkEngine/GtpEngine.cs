@@ -7,6 +7,7 @@ public sealed class GtpEngine
     private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "showboard", "final_score", "kfw-lessons", "quit"];
     private readonly BattleLessons lessons = new();
     private Board board = new(19);
+    private double komi;
     public GtpEngine() { board = new Board(19) { Lessons = lessons }; }
     public void Run(TextReader input, TextWriter output)
     {
@@ -36,11 +37,11 @@ public sealed class GtpEngine
         {
             case "protocol_version": return "2";
             case "name": return "KifuwarabeGoPolypropylene";
-            case "version": return "0.3.1";
+            case "version": return "0.4.0";
             case "kfw-lessons": return System.Text.Json.JsonSerializer.Serialize(board.Lessons.Reports);
             case "final_score":
                 if (!board.IsFinished) throw new ArgumentException("game not finished; pass twice or reach 400 moves");
-                return board.CountStones().Result;
+                return board.ScoreTerritory(komi).Result;
             case "known_command": return Commands.Contains(args[0]) ? "true" : "false";
             case "list_commands": return string.Join('\n', Commands);
             case "boardsize":
@@ -49,7 +50,7 @@ public sealed class GtpEngine
             case "clear_board": board = new Board(board.Size) { Lessons = lessons }; return "";
             case "komi":
                 if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double value) || !double.IsFinite(value)) throw new ArgumentException("invalid komi");
-                // GTP 接続のため受理するが、指定の石数ルールではコミを加算しない。
+                komi = value;
                 return "";
             case "play":
                 if (board.ReachedMoveLimit) throw new ArgumentException("game finished at 400 moves");

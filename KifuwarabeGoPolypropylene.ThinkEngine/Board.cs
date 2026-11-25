@@ -498,6 +498,53 @@ public sealed class Board(int size)
         return result;
     }
 
+    // 戦術#15: 単石は三呼吸点以上へ回復し、他の味方も直後に取られない場合だけ救う。
+    internal IReadOnlySet<int> FindSafeSingleStoneRescueMoves(int color)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        var result = new HashSet<int>();
+        if (Size < 9 || MoveCount >= MoveLimit - 1 || ConsecutivePasses >= 2) return result;
+        var protectedOwners = ProtectedTerritoryOwners();
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != color || Group(cells, p).stones.Count != 1) continue;
+            var liberties = NeighborsOfGroup(p).Take(2).ToArray();
+            if (liberties.Length != 1) continue;
+            var threat = Copy();
+            if (!threat.Play(3 - color, liberties[0]) || threat.cells[p] == color) continue;
+            var candidates = new HashSet<int> { liberties[0] };
+            foreach (int enemy in Neighbors(p).Where(n => cells[n] == 3 - color))
+            {
+                var enemyLiberties = NeighborsOfGroup(enemy).Take(2).ToArray();
+                if (enemyLiberties.Length == 1) candidates.Add(enemyLiberties[0]);
+            }
+            foreach (int candidate in candidates)
+            {
+                if (protectedOwners[candidate] == color || IsEye(color, candidate)) continue;
+                var trial = Copy();
+                if (!trial.Play(color, candidate) || history.Contains(trial.PositionKey)
+                    || trial.cells[p] != color || trial.NeighborsOfGroup(p).Take(3).Count() < 3
+                    || trial.HasImmediateFriendlyLoss(color)) continue;
+                result.Add(candidate);
+            }
+        }
+        return result;
+    }
+
+    private bool HasImmediateFriendlyLoss(int color)
+    {
+        var seen = new HashSet<int>();
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != color || !seen.Add(p)) continue;
+            seen.UnionWith(Group(cells, p).stones);
+            var liberties = NeighborsOfGroup(p).Take(2).ToArray();
+            if (liberties.Length != 1) continue;
+            var reply = Copy();
+            if (reply.Play(3 - color, liberties[0]) && reply.cells[p] != color) return true;
+        }
+        return false;
+    }
     // 戦術#13: 小目の内側は予定地。確定地や死活判定には使わない。
     private IEnumerable<(int anchor, int[] inside, int[] corner)> CornerPlans()
     {
@@ -538,6 +585,7 @@ public sealed class Board(int size)
         var invasionCaptures = SmallInvasionCapturePoints(color);
         var rescues = AtariRescuePoints(color);
         var splits = FindSmallInvasionAtariMoves(color);
+        var singleRescues = FindSafeSingleStoneRescueMoves(color);
         // 戦術#12: 空盤の初手だけ小目C4を優先し、通常の戦訓検査を通す。
         bool komokuOpening = Size >= 9 && MoveCount == 0 && cells.All(c => c == 0);
         int komoku = 3 * Size + 2;
@@ -545,16 +593,27 @@ public sealed class Board(int size)
             .Any(p => cells[p] != 0 && Neighbors(p).Any(n => cells[n] == 3 - cells[p]));
         var openCorners = cornerOpening ? FindOpenCornerKomokuMoves() : Array.Empty<int>();
         var plannedCorners = FindPlannedCornerPoints(color);
+        // 戦術#14: 通常候補は三/四線から。手数だけで解除せず、生きた壁の局所防御は従来順を守る。
+        bool expandOpening = Size >= 9
+            && !Enumerable.Range(0, cells.Length).Any(q => cells[q] == color && HasTwoEyes(color, q));
+        int LinePenalty(int p)
+        {
+            int edge = Math.Min(Math.Min(p % Size, Size - 1 - p % Size),
+                Math.Min(p / Size, Size - 1 - p / Size));
+            return Math.Min(Math.Abs(edge - 2), Math.Abs(edge - 3));
+        }
         foreach (int p in Enumerable.Range(0, cells.Length)
             .OrderByDescending(p => rescues.GetValueOrDefault(p))
             .ThenByDescending(invasionCaptures.Contains)
             .ThenBy(p => splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue)
+            .ThenByDescending(singleRescues.Contains)
             .ThenByDescending(p => komokuOpening && p == komoku)
-            .ThenBy(p => openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue))
+            .ThenBy(p => openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue)
+            .ThenBy(p => expandOpening ? LinePenalty(p) : 0))
         {
             if (protectedOwners[p] == color) continue;
             if (plannedCorners.Contains(p) && !rescues.ContainsKey(p)
-                && !invasionCaptures.Contains(p) && !splits.Contains(p)) continue;
+                && !invasionCaptures.Contains(p) && !splits.Contains(p) && !singleRescues.Contains(p)) continue;
             var trial = Copy();
             if (!trial.Play(color, p)) continue;
             string experience = $"{Key(cells)}:{(previous is null ? "" : Key(previous))}:{color}:{p}";
@@ -597,6 +656,10 @@ public sealed class Board(int size)
             Play(color, p);
             if (komokuOpening && p == komoku) tacticApplications.Add(new("komoku-opening", MoveCount, color, p));
             if (!komokuOpening && openCorners.Contains(p)) tacticApplications.Add(new("komoku-corner-plan", MoveCount, color, p));
+            if (expandOpening && LinePenalty(p) == 0 && !openCorners.Contains(p)
+                && !rescues.ContainsKey(p) && !invasionCaptures.Contains(p) && !splits.Contains(p) && !singleRescues.Contains(p))
+                tacticApplications.Add(new("opening-lines", MoveCount, color, p));
+            if (singleRescues.Contains(p)) tacticApplications.Add(new("safe-single-rescue", MoveCount, color, p));
             if (snapback) tacticApplications.Add(new("resolve-before-pass", MoveCount, color, p));
             if (invasionCaptures.Contains(p)) tacticApplications.Add(new("minimum-invasion-defense", MoveCount, color, p));
             if (rescues.ContainsKey(p)) tacticApplications.Add(new("rescue-atari-chain", MoveCount, color, p));

@@ -69,6 +69,85 @@ internal static class SelfTest
         lateOpening.Generate(1);
         Check(!lateOpening.TacticApplications.Any(a => a.Id == "komoku-corner-plan"),
             "tactic#13 eight-ply boundary disables corner opening priority");
+        // 実戦1705815の一線塗りを、黒白・8方向で再現して通常候補を三四線へ向ける。
+        foreach (int color in new[] { 1, 2 })
+        foreach (int rotation in Enumerable.Range(0, 4))
+        foreach (bool mirror in new[] { false, true })
+        {
+            int MapOpening(int x, int y)
+            {
+                if (mirror) x = 8 - x;
+                for (int r = 0; r < rotation; r++) (x, y) = (8 - y, x);
+                return y * 9 + x;
+            }
+            var boundaryOpening = new Board(9);
+            Check(boundaryOpening.Play(color, MapOpening(2, 3)), "tactic#14 C4 setup");
+            Check(boundaryOpening.Play(3 - color, MapOpening(5, 5)), "tactic#14 F6 setup");
+            Check(boundaryOpening.Play(color, MapOpening(6, 3)), "tactic#14 G4 setup");
+            Check(boundaryOpening.Play(3 - color, MapOpening(5, 3)), "tactic#14 F4 setup");
+            int? selected = boundaryOpening.Generate(color);
+            Check(selected.HasValue, "tactic#14 chooses actual move");
+            int point = selected!.Value;
+            int edge = Math.Min(Math.Min(point % 9, 8 - point % 9), Math.Min(point / 9, 8 - point / 9));
+            Check(edge is 2 or 3, "tactic#14 ordinary opening uses third or fourth line");
+            Check(boundaryOpening.TacticApplications.Any(t => t.Id == "opening-lines"), "tactic#14 actual application recorded");
+        }
+        foreach (int size in new[] { 9, 19 })
+        foreach (int color in new[] { 1, 2 })
+        foreach (int rotation in Enumerable.Range(0, 4))
+        foreach (bool mirror in new[] { false, true })
+        {
+            int MapRescue(int x, int y)
+            {
+                if (mirror) x = size - 1 - x;
+                for (int r = 0; r < rotation; r++) (x, y) = (size - 1 - y, x);
+                return y * size + x;
+            }
+            Board SingleRescueSetup()
+            {
+                var b = new Board(size);
+                b.Play(color, MapRescue(6, 3));
+                foreach (var q in new[] { (5, 3), (6, 2), (6, 4) })
+                    b.Play(3 - color, MapRescue(q.Item1, q.Item2));
+                return b;
+            }
+            int rescuePoint = MapRescue(7, 3);
+            var single = SingleRescueSetup();
+            string position = single.PositionKey;
+            Check(single.FindSafeSingleStoneRescueMoves(color).Contains(rescuePoint), "tactic#15 finds safe three-liberty single rescue");
+            Check(single.PositionKey == position && single.MoveCount == 4 && single.TacticApplications.Count == 0, "tactic#15 probing is nonmutating");
+            Check(single.Generate(color) == rescuePoint && single.TacticApplications.Any(t => t.Id == "safe-single-rescue"),
+                "tactic#15 actual generation rescues single before ordinary opening");
+            var narrow = SingleRescueSetup();
+            Check(narrow.Play(3 - color, MapRescue(7, 2)), "tactic#15 narrow setup");
+            Check(!narrow.FindSafeSingleStoneRescueMoves(color).Contains(rescuePoint), "tactic#15 two liberties are insufficient");
+            var other = SingleRescueSetup();
+            Check(other.Play(color, MapRescue(0, 0)) && other.Play(3 - color, MapRescue(1, 0)), "tactic#15 other atari setup");
+            Check(!other.FindSafeSingleStoneRescueMoves(color).Contains(rescuePoint), "tactic#15 rejects rescue leaving another friendly stone capturable");
+        }
+        Check(new Board(5).FindSafeSingleStoneRescueMoves(1).Count == 0, "tactic#15 excludes small research board");
+        foreach (int color in new[] { 1, 2 })
+        foreach (int rotation in Enumerable.Range(0, 4))
+        foreach (bool mirror in new[] { false, true })
+        {
+            int MapMiddle(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if (mirror) x = 8 - x;
+                for (int r = 0; r < rotation; r++) (x, y) = (8 - y, x);
+                return y * 9 + x;
+            }
+            var middle = new Board(9);
+            int[] sequence = { 29, 50, 33, 48, 21, 38, 22, 28, 20, 42, 23, 34, 24, 67, 30, 37, 31, 25 };
+            for (int i = 0; i < sequence.Length; i++)
+                Check(middle.Play(i % 2 == 0 ? color : 3 - color, MapMiddle(sequence[i])), "tactic#14 actual midgame replay");
+            int? selected = middle.Generate(color);
+            Check(selected.HasValue, "tactic#14 midgame move exists");
+            int point = selected!.Value;
+            int edge = Math.Min(Math.Min(point % 9, 8 - point % 9), Math.Min(point / 9, 8 - point / 9));
+            Check(edge is 2 or 3, "tactic#14 no automatic first-line return at eighteen plies");
+            Check(middle.TacticApplications.Any(t => t.Id == "opening-lines"), "tactic#14 midgame preference recorded");
+        }
         // 戦術#1: 完成形の認識だけを検証し、着手優先はまだ変更しない。
         foreach (int color in new[] { 1, 2 })
         foreach (int rotation in Enumerable.Range(0, 4))

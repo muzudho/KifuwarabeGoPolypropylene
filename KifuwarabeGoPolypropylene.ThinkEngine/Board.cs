@@ -161,6 +161,21 @@ public sealed class Board(int size)
         return count;
     }
 
+    // 支援二眼でも未確認の石のうち共有一点眼で追加確認できる数。既存指標と重複しない。
+    public int SharedAdditionalStoneCount(int color)
+    {
+        var recognized = FindSharedPointEyeStones(color);
+        var seen = new HashSet<int>();
+        int count = 0;
+        foreach (int p in recognized)
+        {
+            if (seen.Contains(p)) continue;
+            var group = Group(cells, p).stones; seen.UnionWith(group);
+            if (!HasTwoEyesWithSupport(color, p)) count += group.Count;
+        }
+        return count;
+    }
+
     // 未確認は死石を意味しない。終局研究で早いパスを見つけるための観測値。
     public int UnconfirmedStoneCount(int color)
     {

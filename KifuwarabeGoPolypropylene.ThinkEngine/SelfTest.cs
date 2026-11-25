@@ -453,6 +453,7 @@ internal static class SelfTest
                         Check(supported.PositionKey == positionBeforeSupport && supported.MoveCount == countBeforeSupport && supported.TacticApplications.Count == 0, "supported recognition is observational");
                     }
         var invalidSupported = new Board(9);
+        Check(invalidSupported.SharedAdditionalStoneCount(1) == 0, "empty board has no additional shared stones");
         Check(!invalidSupported.HasTwoEyesWithSupport(1, -1), "supported eyes reject negative point");
         Check(!invalidSupported.HasTwoEyesWithSupport(2, 81), "supported eyes reject outside point");
         Check(!invalidSupported.HasTwoEyesWithSupport(1, 0), "supported eyes reject empty point");
@@ -681,6 +682,10 @@ internal static class SelfTest
             var recognized = shared.FindSharedPointEyeStones(owner);
             int expected = fixture switch { 0 => 24, 1 or 2 => 25, 4 => 5, _ => 0 };
             Check(recognized.Count == expected, "shared eyes reject single eye and cascading dependencies");
+            int additional = shared.SharedAdditionalStoneCount(owner);
+            Check(additional == (fixture switch { 0 => 24, 1 => 25, 4 => 5, _ => 0 }), "shared additional excludes already confirmed stones");
+            Check(additional + shared.SupportedOnlyStoneCount(owner) <= shared.UnconfirmedStoneCount(owner),
+                "additional recognition partitions old unconfirmed without double counting");
             Check(recognized.SequenceEqual(recognized.Order()) && recognized.Distinct().Count() == recognized.Count,
                 "shared recognition is unique and sorted");
             Check(shared.FindSharedPointEyeStones(3 - owner).Count == 0, "shared recognition respects color");

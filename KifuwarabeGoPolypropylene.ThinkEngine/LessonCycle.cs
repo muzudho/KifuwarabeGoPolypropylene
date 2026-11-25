@@ -78,6 +78,8 @@ internal static class LessonCycle
                 unconfirmedWhite = board.UnconfirmedStoneCount(2),
                 supportedOnlyBlack = board.SupportedOnlyStoneCount(1),
                 supportedOnlyWhite = board.SupportedOnlyStoneCount(2),
+                sharedAdditionalBlack = board.SharedAdditionalStoneCount(1),
+                sharedAdditionalWhite = board.SharedAdditionalStoneCount(2),
                 scoreStatus = outcome == "timeout" ? "unscored" : "provisional-not-proof-of-settlement",
                 lessons = board.Lessons.Reports, evidence = board.Lessons.Examples,
                 tactics = board.TacticApplications
@@ -85,7 +87,7 @@ internal static class LessonCycle
             if (outcome == "timeout") break;
         }
         var summary = new {
-            version = 6, seed, randomStream = "per-game-v1", requestedGames = games, completed, moveLimits, timedOut,
+            version = 7, seed, randomStream = "per-game-v1", requestedGames = games, completed, moveLimits, timedOut,
             provisionallyScoredGames = completed + moveLimits, moveLimit = Board.MoveLimit,
             repeatedPositions = repeated, elapsedSeconds = timer.Elapsed.TotalSeconds,
             byBoardSize = bySize.Select(pair => new { size = pair.Key, games = pair.Value[0], completed = pair.Value[1], moveLimits = pair.Value[2], repeats = pair.Value[3] }),

@@ -122,6 +122,45 @@ public sealed class Board(int size)
         }
         return false;
     }
+    // 観測専用。同じ連の二眼、または既に二眼の味方だけが支える独立一目眼二つ。
+    // この認識を未確認数・地保護・着手選択へはまだ組み込まない。
+    public bool HasTwoEyesWithSupport(int color, int stone)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        if (stone < 0 || stone >= cells.Length || cells[stone] != color) return false;
+        if (HasTwoEyes(color, stone)) return true;
+        var group = Group(cells, stone).stones;
+        var anchors = new Dictionary<int, bool>();
+        bool SupportedBy(int p)
+        {
+            if (group.Contains(p)) return true;
+            if (!anchors.TryGetValue(p, out bool alive))
+            {
+                // 拡張した認識を再帰に使わず、元の二眼だけを支えの証拠にする。
+                alive = HasTwoEyes(color, p);
+                foreach (int n in Group(cells, p).stones) anchors[n] = alive;
+            }
+            return alive;
+        }
+        return group.SelectMany(Neighbors).Where(p => cells[p] == 0).Distinct()
+            .Count(p => Neighbors(p).All(n => cells[n] == color && SupportedBy(n))) >= 2;
+    }
+
+    // 旧基準では未確認だが支援二眼で認識できる石だけを別指標として数える。
+    public int SupportedOnlyStoneCount(int color)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        var seen = new HashSet<int>();
+        int count = 0;
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != color || seen.Contains(p)) continue;
+            var group = Group(cells, p).stones; seen.UnionWith(group);
+            if (!HasTwoEyes(color, p) && HasTwoEyesWithSupport(color, p)) count += group.Count;
+        }
+        return count;
+    }
+
     // 未確認は死石を意味しない。終局研究で早いパスを見つけるための観測値。
     public int UnconfirmedStoneCount(int color)
     {
@@ -154,6 +193,105 @@ public sealed class Board(int size)
                 result.Add(p);
         }
         return result;
+    }
+    // 戦術#9: 候補抽出のみ。二呼吸点の小連を三呼吸点以上へ伸ばす。
+    // 三呼吸点は生きの証明ではなく、着手優先・地保護には使わない。
+    public IReadOnlyList<int> FindPreAtariEscapeMoves(int color)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        // 着手直後の相手応手まで400手内で検査できる局面に限る。
+        if (IsFinished || MoveCount >= MoveLimit - 1) return Array.Empty<int>();
+        var result = new HashSet<int>(); var seen = new HashSet<int>();
+        var owners = ProtectedTerritoryOwners();
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != color || seen.Contains(p)) continue;
+            var group = Group(cells, p).stones; seen.UnionWith(group);
+            if (group.Count > 3 || HasTwoEyesWithSupport(color, p)) continue;
+            var liberties = NeighborsOfGroup(p).Take(3).ToArray();
+            if (liberties.Length != 2) continue;
+            foreach (int candidate in liberties)
+            {
+                if (owners[candidate] == color || IsEye(color, candidate)) continue;
+                var trial = Copy();
+                if (!trial.Play(color, candidate) || history.Contains(trial.PositionKey)
+                    || trial.NeighborsOfGroup(p).Take(3).Count() < 3
+                    || trial.StonesLostToImmediateReply(color, candidate) > 0) continue;
+                result.Add(candidate);
+            }
+        }
+        return result.Order().ToArray();
+    }
+    // 戦術#9の限定候補。既に基礎二眼の味方へ連絡して確認済みとなる伸びだけ。
+    // 全盤の利益・他連の安全は保証せず、Generateの優先には使わない。
+    public IReadOnlyList<int> FindPreAtariLivingConnectionMoves(int color)
+    {
+        var result = new List<int>();
+        foreach (int candidate in FindPreAtariEscapeMoves(color))
+        {
+            if (!Neighbors(candidate).Any(n => cells[n] == color && HasTwoEyes(color, n))) continue;
+            var trial = Copy();
+            if (trial.Play(color, candidate) && trial.HasTwoEyesWithSupport(color, candidate)) result.Add(candidate);
+        }
+        return result;
+    }
+    // 戦術#11の観測のみ。共有する独立一点眼を二つ以上保つ連の集合。
+    // 非認識は死石を意味しない。大きな眼・セキ・正式終局の判定は対象外。
+    public IReadOnlyList<int> FindSharedPointEyeStones(int color)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        var ids = Enumerable.Repeat(-1, cells.Length).ToArray();
+        var groups = new List<HashSet<int>>();
+        for (int p = 0; p < cells.Length; p++)
+        {
+            if (cells[p] != color || ids[p] >= 0) continue;
+            var group = Group(cells, p).stones;
+            foreach (int stone in group) ids[stone] = groups.Count;
+            groups.Add(group);
+        }
+        var eyes = Enumerable.Range(0, cells.Length)
+            .Where(p => cells[p] == 0 && Neighbors(p).All(n => cells[n] == color))
+            .Select(p => Neighbors(p).Select(n => ids[n]).Distinct().ToArray()).ToArray();
+        var remaining = Enumerable.Range(0, groups.Count).ToHashSet();
+        while (true)
+        {
+            // 除外された境界連に依存する眼も外す。単なる循環支援では認定しない。
+            var validEyes = eyes.Where(boundary => boundary.All(remaining.Contains)).ToArray();
+            var remove = remaining.Where(g => validEyes.Count(boundary => boundary.Contains(g)) < 2).ToArray();
+            if (remove.Length == 0) break;
+            remaining.ExceptWith(remove);
+        }
+        return remaining.SelectMany(g => groups[g]).Order().ToArray();
+    }
+
+    // 戦術#10の観測読み。別手→相手の任意の合法一手→同じ点での捕獲を検査。
+    // trueはこの3手の保持だけ。falseは未確認を含み、死活・最善順位を表さない。
+    public bool CanDeferSmallCapture(int color, int capturePoint, int alternativePoint)
+    {
+        if (color is not (1 or 2) || capturePoint < 0 || capturePoint >= cells.Length
+            || alternativePoint < 0 || alternativePoint >= cells.Length
+            || IsFinished || MoveCount > MoveLimit - 3 || capturePoint == alternativePoint) return false;
+        var immediate = Copy();
+        if (!immediate.Play(color, capturePoint) || history.Contains(immediate.PositionKey)) return false;
+        var target = Enumerable.Range(0, cells.Length)
+            .Where(p => cells[p] == 3 - color && immediate.cells[p] != 3 - color).ToArray();
+        if (target.Length is < 1 or > 3 || ProtectedTerritoryOwners()[alternativePoint] == color
+            || IsEye(color, alternativePoint)) return false;
+        var after = Copy();
+        if (!after.Play(color, alternativePoint) || history.Contains(after.PositionKey)
+            || after.StonesLostToImmediateReply(color, alternativePoint) > 0) return false;
+        string afterPosition = after.PositionKey;
+        foreach (int? reply in Enumerable.Range(0, cells.Length).Select(p => (int?)p).Append(null))
+        {
+            var trial = after.Copy();
+            // 相手の合法性はPlayの自殺手・単純コウで検査。自分の既出回避を相手へ課さない。
+            if (!trial.Play(3 - color, reply)) continue;
+            string replyPosition = trial.PositionKey;
+            if (!trial.Play(color, capturePoint) || target.Any(p => trial.cells[p] == 3 - color)) return false;
+            string capturedPosition = trial.PositionKey;
+            if (history.Contains(capturedPosition) || capturedPosition == afterPosition || capturedPosition == replyPosition) return false;
+        }
+        return true;
     }
     // 戦術#6候補抽出のみ。囲まれた未確認侵入の唯一の一手二眼完成を妨げる。
     public IReadOnlyList<int> FindTwoEyeDenialMoves(int color)
@@ -353,9 +491,11 @@ public sealed class Board(int size)
         var protectedOwners = ProtectedTerritoryOwners();
         var invasionCaptures = SmallInvasionCapturePoints(color);
         var rescues = AtariRescuePoints(color);
+        var splits = FindSmallInvasionAtariMoves(color);
         foreach (int p in Enumerable.Range(0, cells.Length)
             .OrderByDescending(p => rescues.GetValueOrDefault(p))
-            .ThenByDescending(invasionCaptures.Contains))
+            .ThenByDescending(invasionCaptures.Contains)
+            .ThenBy(p => splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue))
         {
             if (protectedOwners[p] == color) continue;
             var trial = Copy();
@@ -401,6 +541,7 @@ public sealed class Board(int size)
             if (snapback) tacticApplications.Add(new("resolve-before-pass", MoveCount, color, p));
             if (invasionCaptures.Contains(p)) tacticApplications.Add(new("minimum-invasion-defense", MoveCount, color, p));
             if (rescues.ContainsKey(p)) tacticApplications.Add(new("rescue-atari-chain", MoveCount, color, p));
+            if (splits.Contains(p)) tacticApplications.Add(new("split-small-invasion", MoveCount, color, p));
             return p;
         }
         // 自分の地は候補とフォールバックから除外する。残りの合法手がなければパス。

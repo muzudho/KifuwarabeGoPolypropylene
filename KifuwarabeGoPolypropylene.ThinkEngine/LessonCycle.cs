@@ -6,6 +6,8 @@ namespace KifuwarabeGoPolypropylene.ThinkEngine;
 // 対局の証拠を収集する。研究ルールの勝敗を記録するが大会ルールの棋力とは区別する。
 internal static class LessonCycle
 {
+    internal static int GameSeed(int seed, int gameIndex) => unchecked(seed + gameIndex * 1_000_003);
+
     public static int Run(string[] args)
     {
         string Option(string name, string fallback)
@@ -20,7 +22,7 @@ internal static class LessonCycle
         if (games < 1 || seconds < 1) throw new ArgumentException("games and time-limit must be positive");
         Directory.CreateDirectory(directory);
         var timer = Stopwatch.StartNew();
-        var random = new Random(seed);
+
         int completed = 0, moveLimits = 0, timedOut = 0, repeated = 0;
         var bySize = new Dictionary<int, int[]>();
         using var log = new StreamWriter(Path.Combine(directory, "games.jsonl"), false) { AutoFlush = true };
@@ -29,6 +31,9 @@ internal static class LessonCycle
             if (timer.Elapsed.TotalSeconds >= seconds) { timedOut++; break; }
             // 9路・19路を優先し、各サイズで自己対局とランダム相手の両方を行う。
             int size = new[] { 9, 19, 9, 19, 3, 5, 3, 5 }[gameIndex % 8];
+            // 前の局の長さが変わっても、この局の乱数列は変えない。
+            int gameSeed = GameSeed(seed, gameIndex);
+            var random = new Random(gameSeed);
             var board = new Board(size);
             var moves = new List<int?>();
             var seen = new HashSet<string> { board.PositionKey };
@@ -65,12 +70,14 @@ internal static class LessonCycle
             bySize[size][2] += outcome == "move-limit" ? 1 : 0;
             bySize[size][3] += repeats;
             log.WriteLine(JsonSerializer.Serialize(new {
-                gameIndex, seed, size, randomOpponent, openingLength, outcome,
+                gameIndex, seed, gameSeed, randomStream = "per-game-v1", size, randomOpponent, openingLength, outcome,
                 repeats, moves, moveCount = board.MoveCount,
                 territoryScore = outcome == "timeout" ? null : board.ScoreTerritory(0),
                 stoneCount = board.CountStones(),
                 unconfirmedBlack = board.UnconfirmedStoneCount(1),
                 unconfirmedWhite = board.UnconfirmedStoneCount(2),
+                supportedOnlyBlack = board.SupportedOnlyStoneCount(1),
+                supportedOnlyWhite = board.SupportedOnlyStoneCount(2),
                 scoreStatus = outcome == "timeout" ? "unscored" : "provisional-not-proof-of-settlement",
                 lessons = board.Lessons.Reports, evidence = board.Lessons.Examples,
                 tactics = board.TacticApplications
@@ -78,7 +85,7 @@ internal static class LessonCycle
             if (outcome == "timeout") break;
         }
         var summary = new {
-            version = 4, seed, requestedGames = games, completed, moveLimits, timedOut,
+            version = 6, seed, randomStream = "per-game-v1", requestedGames = games, completed, moveLimits, timedOut,
             provisionallyScoredGames = completed + moveLimits, moveLimit = Board.MoveLimit,
             repeatedPositions = repeated, elapsedSeconds = timer.Elapsed.TotalSeconds,
             byBoardSize = bySize.Select(pair => new { size = pair.Key, games = pair.Value[0], completed = pair.Value[1], moveLimits = pair.Value[2], repeats = pair.Value[3] }),

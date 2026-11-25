@@ -498,6 +498,37 @@ public sealed class Board(int size)
         return result;
     }
 
+    // 戦術#13: 小目の内側は予定地。確定地や死活判定には使わない。
+    private IEnumerable<(int anchor, int[] inside, int[] corner)> CornerPlans()
+    {
+        if (Size < 9) yield break;
+        foreach (bool swap in new[] { false, true })
+        foreach (bool top in new[] { false, true })
+        foreach (bool right in new[] { false, true })
+        {
+            int Map(int x, int y)
+            {
+                if (swap) (x, y) = (y, x);
+                if (right) x = Size - 1 - x;
+                if (top) y = Size - 1 - y;
+                return y * Size + x;
+            }
+            yield return (Map(2, 3),
+                Enumerable.Range(0, 12).Select(i => Map(i % 3, i / 3)).ToArray(),
+                Enumerable.Range(0, 16).Select(i => Map(i % 4, i / 4)).ToArray());
+        }
+    }
+
+    internal IReadOnlyList<int> FindOpenCornerKomokuMoves() => CornerPlans()
+        .Where(plan => plan.corner.All(p => cells[p] == 0)).Select(plan => plan.anchor).ToArray();
+
+    internal IReadOnlySet<int> FindPlannedCornerPoints(int color)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        return CornerPlans().Where(plan => cells[plan.anchor] == color
+                && plan.corner.All(p => cells[p] != 3 - color))
+            .SelectMany(plan => plan.inside).Where(p => cells[p] == 0).ToHashSet();
+    }
     // 合法性と戦訓は分離する。相手の合法手を戦訓で拒否しない。
     public int? Generate(int color)
     {
@@ -507,12 +538,23 @@ public sealed class Board(int size)
         var invasionCaptures = SmallInvasionCapturePoints(color);
         var rescues = AtariRescuePoints(color);
         var splits = FindSmallInvasionAtariMoves(color);
+        // 戦術#12: 空盤の初手だけ小目C4を優先し、通常の戦訓検査を通す。
+        bool komokuOpening = Size >= 9 && MoveCount == 0 && cells.All(c => c == 0);
+        int komoku = 3 * Size + 2;
+        bool cornerOpening = MoveCount < 8 && !Enumerable.Range(0, cells.Length)
+            .Any(p => cells[p] != 0 && Neighbors(p).Any(n => cells[n] == 3 - cells[p]));
+        var openCorners = cornerOpening ? FindOpenCornerKomokuMoves() : Array.Empty<int>();
+        var plannedCorners = FindPlannedCornerPoints(color);
         foreach (int p in Enumerable.Range(0, cells.Length)
             .OrderByDescending(p => rescues.GetValueOrDefault(p))
             .ThenByDescending(invasionCaptures.Contains)
-            .ThenBy(p => splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue))
+            .ThenBy(p => splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue)
+            .ThenByDescending(p => komokuOpening && p == komoku)
+            .ThenBy(p => openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue))
         {
             if (protectedOwners[p] == color) continue;
+            if (plannedCorners.Contains(p) && !rescues.ContainsKey(p)
+                && !invasionCaptures.Contains(p) && !splits.Contains(p)) continue;
             var trial = Copy();
             if (!trial.Play(color, p)) continue;
             string experience = $"{Key(cells)}:{(previous is null ? "" : Key(previous))}:{color}:{p}";
@@ -553,6 +595,8 @@ public sealed class Board(int size)
                 continue;
             }
             Play(color, p);
+            if (komokuOpening && p == komoku) tacticApplications.Add(new("komoku-opening", MoveCount, color, p));
+            if (!komokuOpening && openCorners.Contains(p)) tacticApplications.Add(new("komoku-corner-plan", MoveCount, color, p));
             if (snapback) tacticApplications.Add(new("resolve-before-pass", MoveCount, color, p));
             if (invasionCaptures.Contains(p)) tacticApplications.Add(new("minimum-invasion-defense", MoveCount, color, p));
             if (rescues.ContainsKey(p)) tacticApplications.Add(new("rescue-atari-chain", MoveCount, color, p));

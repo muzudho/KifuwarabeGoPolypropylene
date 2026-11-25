@@ -10,6 +10,65 @@ internal static class SelfTest
             if (!ok) throw new InvalidOperationException("FAIL: " + name);
             count++;
         }
+        // 空盤だけの布石。後手の初着手やパス後へ拡張しない。
+        foreach (int size in new[] { 9, 13, 19 })
+        foreach (int color in new[] { 1, 2 })
+        {
+            var opening = new Board(size);
+            Check(opening.Generate(color) == 3 * size + 2, "tactic#12 empty-board komoku C4");
+            Check(opening.MoveCount == 1 && opening.At(2, 3) == color, "tactic#12 plays exactly one stone");
+            Check(opening.TacticApplications.Count(a => a.Id == "komoku-opening") == 1, "tactic#12 application recorded");
+            opening.Generate(3 - color);
+            Check(opening.TacticApplications.Count(a => a.Id == "komoku-opening") == 1, "tactic#12 not repeated after opponent stone");
+            var passed = new Board(size);
+            passed.Play(3 - color, null);
+            passed.Generate(color);
+            Check(!passed.TacticApplications.Any(a => a.Id == "komoku-opening"), "tactic#12 not enabled after pass");
+        }
+        foreach (int size in new[] { 9, 19 })
+        foreach (int color in new[] { 1, 2 })
+        foreach (bool swap in new[] { false, true })
+        foreach (bool top in new[] { false, true })
+        foreach (bool right in new[] { false, true })
+        {
+            int Map(int x, int y)
+            {
+                if (swap) (x, y) = (y, x);
+                if (right) x = size - 1 - x;
+                if (top) y = size - 1 - y;
+                return y * size + x;
+            }
+            var plan = new Board(size);
+            Check(plan.Play(color, Map(2, 3)), "tactic#13 komoku setup");
+            var inside = plan.FindPlannedCornerPoints(color);
+            Check(inside.Count == 11 && inside.Contains(Map(0, 0)), "tactic#13 eleven empty planned points across symmetries");
+            Check(plan.FindPlannedCornerPoints(3 - color).Count == 0, "tactic#13 opponent does not own plan");
+            Check(!plan.FindOpenCornerKomokuMoves().Any(p => p == Map(2, 3) || p == Map(3, 2)), "tactic#13 occupied corner excluded in both orientations");
+            int? next = plan.Generate(color);
+            Check(next is int n && !inside.Contains(n) && plan.TacticApplications.Any(a => a.Id == "komoku-corner-plan"),
+                "tactic#13 next move takes another corner rather than painting inside");
+            var invaded = new Board(size);
+            invaded.Play(color, Map(2, 3));
+            Check(invaded.Play(3 - color, Map(1, 2)), "tactic#13 invasion remains legal");
+            Check(!invaded.FindPlannedCornerPoints(color).Contains(Map(0, 0)), "tactic#13 contested corner releases planned exclusion");
+        }
+        foreach (int size in new[] { 3, 5 })
+        {
+            var small = new Board(size);
+            Check(small.FindOpenCornerKomokuMoves().Count == 0 && small.FindPlannedCornerPoints(1).Count == 0,
+                "tactic#13 small research boards unchanged");
+        }
+        var contactOpening = new Board(9);
+        contactOpening.Play(1, 29);
+        contactOpening.Play(2, 20);
+        contactOpening.Generate(1);
+        Check(!contactOpening.TacticApplications.Any(a => a.Id == "komoku-corner-plan"),
+            "tactic#13 contact fight disables corner opening priority");
+        var lateOpening = new Board(9);
+        for (int i = 0; i < 8; i++) lateOpening.Play(1, null);
+        lateOpening.Generate(1);
+        Check(!lateOpening.TacticApplications.Any(a => a.Id == "komoku-corner-plan"),
+            "tactic#13 eight-ply boundary disables corner opening priority");
         // 戦術#1: 完成形の認識だけを検証し、着手優先はまだ変更しない。
         foreach (int color in new[] { 1, 2 })
         foreach (int rotation in Enumerable.Range(0, 4))
@@ -108,9 +167,9 @@ internal static class SelfTest
             new GtpEngine().Run(new StringReader(commands), output);
             return output.ToString();
         }
-        Check(Exchange("# comment\n1 protocol_version\nboardsize 9\nplay b D4\n2 genmove w\nquit\nname\n") == "=1 2\n\n=\n\n=\n\n=2 A1\n\n=\n\n", "GTP framing, ids, comments, generation, quit");
+        Check(Exchange("# comment\n1 protocol_version\nboardsize 5\nplay b D4\n2 genmove w\nquit\nname\n") == "=1 2\n\n=\n\n=\n\n=2 A1\n\n=\n\n", "GTP framing, ids, comments, generation, quit");
         Check(Exchange("boardsize 1\nplay x A1\nplay b I1\nunknown\n") == "? unacceptable size\n\n? invalid color\n\n? invalid vertex\n\n? unknown command\n\n", "GTP errors");
-        Check(Exchange("boardsize 9\nplay b A1\nclear_board\ngenmove w\n").EndsWith("= A1\n\n"), "clear board");
+        Check(Exchange("boardsize 9\nplay b A1\nclear_board\ngenmove w\n").EndsWith("= C4\n\n"), "clear board resets komoku opening");
         Check(Exchange("boardsize 19\nplay b T19\nplay w T19\n").EndsWith("? illegal move\n\n"), "19x19 coordinates");
         var eyes = new Board(3);
         foreach (int p in new[] { 1, 2, 3, 5, 6, 7, 8 }) Check(eyes.Play(1, p), "two-eye setup");

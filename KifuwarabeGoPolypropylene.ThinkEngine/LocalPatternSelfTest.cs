@@ -56,6 +56,40 @@ internal static class LocalPatternSelfTest
                 check(SplitShapePattern.Matches(cells, size, color, target), "local split wildcard accepts extra support");
             }
         }
+        // 一間の割込み後、切った二石を取るまでに相手が他所へ三手打てる提示例。
+        foreach (int size in new[] { 9, 19 })
+        foreach (int color in new[] { 1, 2 })
+        for (int symmetry = 0; symmetry < 8; symmetry++)
+        {
+            int Map(int x, int y)
+            {
+                if (symmetry >= 4) x = size - 1 - x;
+                for (int r = 0; r < symmetry % 4; r++) (x, y) = (y, size - 1 - x);
+                return y * size + x;
+            }
+            var board = new Board(size);
+            (int color, int x, int y)[] sequence =
+            [
+                (color, 2, 3), (3 - color, 3, 4), // C4、D5
+                (color, 4, 3), (3 - color, 3, 3), // E4、D4の割込み
+                (color, 3, 2), (3 - color, 2, 2), // D3、C3の切り
+                (color, 1, 2), (3 - color, 2, 1), // B3、C2へ伸びる
+                (color, 1, 1), (3 - color, 2, 6), // B2、他所のC7
+                (color, 3, 1), (3 - color, 6, 6), // D2、他所のG7
+                (color, 2, 0), (3 - color, 6, 2)  // C1で二石取り、他所のG3
+            ];
+            foreach (var move in sequence)
+                check(board.Play(move.color, Map(move.x, move.y)), "one-space sacrifice sequence legal");
+            check(board.At(Map(2, 1) % size, Map(2, 1) / size) == 0
+                && board.At(Map(2, 2) % size, Map(2, 2) / size) == 0,
+                "one-space sacrifice removes exactly the two cutting stones");
+            check((color == 1 ? board.BlackPrisoners : board.WhitePrisoners) == 2,
+                "one-space sacrifice prisoner count");
+            foreach (var point in new[] { (2, 6), (6, 6), (6, 2) })
+                check(board.At(Map(point.Item1, point.Item2) % size,
+                    Map(point.Item1, point.Item2) / size) == 3 - color,
+                    "one-space sacrifice permits three plays elsewhere");
+        }
         // 実戦1706083の白70J5。H5の黒石が残るので空き三角ではない。
         int[] realPosition = "010102010101011122012112111012122222122110110021001012021111120021222112201020210"
             .Select(c => c - '0').ToArray();

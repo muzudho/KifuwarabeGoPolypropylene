@@ -21,6 +21,8 @@ namespace KifuwarabeGoPolypropylene.Domain.LocalPatterns.SplitShape;
 ///             - 着手前の T を原点に、次の二点だけを八方向で確認する。
 ///                 型1: 相手石(+1, +1)、自石(+2, +1)
 ///                 型2: 相手石(+1,  0)、自石(+2, +1)
+///                 型3: 相手石(+1, +1)、自石(+2, 0)、空点(+1, 0)
+///                       一間の間へ次に割り込まれる形（C4/白D5→E4など）。
 ///                 指定していない点は読まず、他の石の連結状態も条件にしない。
 ///
 ///             - 一致だけで悪手としない。捕獲・救出の働き、手番、
@@ -36,6 +38,9 @@ public static class SplitShapePattern
         if (!LocalPatternMatcher.IsTargetValid(cells, size, color, target)) return false;
         for (int symmetry = 0; symmetry < 8; symmetry++)
         {
+            if (LocalPatternMatcher.HasStone(cells, size, target, 2, 0, color, symmetry)
+                && LocalPatternMatcher.HasStone(cells, size, target, 1, 1, 3 - color, symmetry)
+                && LocalPatternMatcher.HasStone(cells, size, target, 1, 0, 0, symmetry)) return true;
             if (!LocalPatternMatcher.HasStone(cells, size, target, 2, 1, color, symmetry)) continue;
             if (LocalPatternMatcher.HasStone(cells, size, target, 1, 1, 3 - color, symmetry)
                 || LocalPatternMatcher.HasStone(cells, size, target, 1, 0, 3 - color, symmetry)) return true;

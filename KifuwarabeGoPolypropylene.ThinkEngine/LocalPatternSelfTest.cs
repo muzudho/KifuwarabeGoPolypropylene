@@ -32,6 +32,19 @@ internal static class LocalPatternSelfTest
                 check(DumplingStonesPattern.Matches(cells, size, color, target) == (wildcard == color), "local dumpling distinguished from triangle");
                 check(string.Join(',', cells) == before, "local pattern reads do not mutate board");
             }
+            // 一間の両端と相手の支え、まだ空いている割込み点を一緒に調べる。
+            foreach (int gap in new[] { 0, 1, 2 })
+            {
+                var cells = new int[size * size];
+                cells[Map(2, 0)] = color;
+                cells[Map(1, 1)] = 3 - color;
+                cells[Map(1, 0)] = gap;
+                check(SplitShapePattern.Matches(cells, size, color, target) == (gap == 0),
+                    "local one-space split requires open cut point");
+                cells[Map(1, 1)] = 0;
+                check(!SplitShapePattern.Matches(cells, size, color, target),
+                    "local one-space jump without enemy support is not split");
+            }
             foreach (int enemyY in new[] { 0, 1 })
             {
                 var cells = new int[size * size];
@@ -43,6 +56,14 @@ internal static class LocalPatternSelfTest
                 check(SplitShapePattern.Matches(cells, size, color, target), "local split wildcard accepts extra support");
             }
         }
+        // 実戦1706083の白70J5。H5の黒石が残るので空き三角ではない。
+        int[] realPosition = "010102010101011122012112111012122222122110110021001012021111120021222112201020210"
+            .Select(c => c - '0').ToArray();
+        check(realPosition[43] == 1 && !EmptyTrianglePattern.Matches(realPosition, 9, 2, 44),
+            "real1706083 J5 with black H5 is not empty triangle");
+        realPosition[43] = 0;
+        check(EmptyTrianglePattern.Matches(realPosition, 9, 2, 44),
+            "real1706083 J5 becomes empty triangle when H5 is empty");
         var empty = new int[81];
         check(!EmptyTrianglePattern.Matches(empty, 9, 1, 40), "local empty board has no triangle");
         check(!DumplingStonesPattern.Matches(empty, 9, 1, 40), "local empty board has no dumpling");

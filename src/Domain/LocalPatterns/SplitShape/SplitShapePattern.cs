@@ -32,6 +32,16 @@ namespace KifuwarabeGoPolypropylene.Domain.LocalPatterns.SplitShape;
 /// </summary>
 public static class SplitShapePattern
 {
+    /// <summary>一間の空点へ、斜めの相手石に支えられた割込みを許す型だけを調べる。</summary>
+    public static bool MatchesOneSpace(ReadOnlySpan<int> cells, int size, int color, int target)
+    {
+        if (!LocalPatternMatcher.IsTargetValid(cells, size, color, target)) return false;
+        for (int symmetry = 0; symmetry < 8; symmetry++)
+            if (LocalPatternMatcher.HasStone(cells, size, target, 2, 0, color, symmetry)
+                && LocalPatternMatcher.HasStone(cells, size, target, 1, 1, 3 - color, symmetry)
+                && LocalPatternMatcher.HasStone(cells, size, target, 1, 0, 0, symmetry)) return true;
+        return false;
+    }
     /// <summary>着手候補と二つの既存石が指定の相対配置になるか調べる。</summary>
     public static bool Matches(ReadOnlySpan<int> cells, int size, int color, int target)
     {

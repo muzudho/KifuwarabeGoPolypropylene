@@ -11,6 +11,100 @@ internal static class SelfTest
             count++;
         }
         LocalPatternSelfTest.Run(Check);
+        // 戦術#23：実戦1706191の二眼完成逃しを黒白八対称の全履歴で再現する。
+        var twoEyeGame = new (int Color, int? Point)[] { (1, 29), (2, 50), (1, 33), (2, 32), (1, 21), (2, 24), (1, 22), (2, 23), (1, 38), (2, 57), (1, 42), (2, 51), (1, 41), (2, 40), (1, 47), (2, 34), (1, 43), (2, 52), (1, 44), (2, 35), (1, 56), (2, 65), (1, 58), (2, 48), (1, 49), (2, 67), (1, 59), (2, 68), (1, 60), (2, 39), (1, 14), (2, 64), (1, 15), (2, 16), (1, 61), (2, 53), (1, 42), (2, 69), (1, 33), (2, 36), (1, 43), (2, 55), (1, 70), (2, 79), (1, 4), (2, 37), (1, 46), (2, 28), (1, 10), (2, 30), (1, 20), (2, 45), (1, 31), (2, 41), (1, 0), (2, 6), (1, 2), (2, 19), (1, 3), (2, 7), (1, 72), (2, 73), (1, 75), (2, 66), (1, 76), (2, 25), (1, 77), (2, 5), (1, 13), (2, 54), (1, 11), (2, 18) };
+        for (int eyeSwap = 0; eyeSwap < 2; eyeSwap++)
+        for (int eyeSym = 0; eyeSym < 8; eyeSym++)
+        {
+            int EyeMap(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if (eyeSym >= 4) x = 8 - x;
+                for (int i = 0; i < eyeSym % 4; i++) (x, y) = (y, 8 - x);
+                return x + y * 9;
+            }
+            var twoEyeRoot = new Board(9);
+            foreach (var move in twoEyeGame)
+                Check(twoEyeRoot.Play(eyeSwap == 0 ? move.Color : 3 - move.Color,
+                    move.Point is int q ? EyeMap(q) : null), "tactic#23 full history");
+            int own = eyeSwap == 0 ? 1 : 2;
+            string before = twoEyeRoot.PositionKey;
+            Check(twoEyeRoot.FindTwoEyeCompletingMoves(own).Contains(EyeMap(9)), "tactic#23 completion candidate");
+            Check(twoEyeRoot.PositionKey == before, "tactic#23 observation unchanged");
+            Check(twoEyeRoot.Generate(own) == EyeMap(9), "tactic#23 selects necessary triangle");
+            Check(twoEyeRoot.HasTwoEyes(own, EyeMap(11)), "tactic#23 target two eyes");
+            Check(!twoEyeRoot.FindTwoEyeCompletingMoves(own).Contains(EyeMap(1)), "tactic#23 alive extension excluded");
+        }
+
+        // 戦術#22：一眼形成の働きと、別連・偽眼・適用盤サイズの反例。
+        foreach (int eyeColor in new[] { 1, 2 })
+        foreach (int eyeSize in new[] { 9, 19 })
+        {
+            var eyeBoard = new Board(eyeSize);
+            Check(eyeBoard.Play(eyeColor, eyeSize) && eyeBoard.Play(eyeColor, eyeSize + 1), "tactic#22 corner fixture");
+            string eyeBefore = eyeBoard.PositionKey;
+            Check(eyeBoard.FormsSinglePointEye(eyeColor, 1) == (eyeSize == 9), "tactic#22 nine only");
+            Check(eyeBoard.PositionKey == eyeBefore, "tactic#22 root unchanged");
+            Check(!eyeBoard.FormsSinglePointEye(eyeColor, eyeSize), "tactic#22 occupied");
+            Check(!eyeBoard.FormsSinglePointEye(eyeColor, -1), "tactic#22 invalid coordinate");
+        }
+        foreach (int eyeColor in new[] { 1, 2 })
+        {
+            var singleEyeSeparateFixture = new Board(9);
+            foreach (var (x, y) in new[] { (3, 4), (4, 3), (4, 5) })
+                Check(singleEyeSeparateFixture.Play(eyeColor, y * 9 + x), "tactic#22 separate fixture");
+            Check(!singleEyeSeparateFixture.FormsSinglePointEye(eyeColor, 41), "tactic#22 separate groups excluded");
+            var singleEyeFalseFixture = new Board(9);
+            foreach (var (x, y) in new[] { (3, 4), (4, 3), (4, 2), (4, 1), (5, 1), (6, 1), (6, 2), (6, 3), (6, 4), (6, 5), (5, 5), (4, 5), (3, 5) })
+                Check(singleEyeFalseFixture.Play(eyeColor, y * 9 + x), "tactic#22 connected fixture");
+            Check(singleEyeFalseFixture.Play(3 - eyeColor, 30) && singleEyeFalseFixture.Play(3 - eyeColor, 32), "tactic#22 diagonal enemies");
+            Check(!singleEyeFalseFixture.FormsSinglePointEye(eyeColor, 41), "tactic#22 two diagonal enemies excluded");
+        }
+        foreach (int size in new[] { 9, 19 })
+        foreach (int color in new[] { 1, 2 })
+        {
+            int target = 4 * size + 4;
+            var exposedBoard = new Board(size);
+            Check(exposedBoard.Play(3 - color, target + 1)
+                && exposedBoard.Play(3 - color, target + size), "tactic#21 exposed fixture legal");
+            string exposedOriginal = exposedBoard.PositionKey; int beforeMoves = exposedBoard.MoveCount;
+            Check(exposedBoard.ShouldDeferExposedSingle(color, target) == (size == 9),
+                "tactic#21 exposed single limited to nine");
+            Check(exposedBoard.PositionKey == exposedOriginal && exposedBoard.MoveCount == beforeMoves,
+                "tactic#21 observation preserves root");
+            if (size == 9)
+            {
+                var deferred = Enumerable.Range(0, 81)
+                    .Where(p => exposedBoard.ShouldDeferExposedSingle(color, p)).ToHashSet();
+                int? selected = exposedBoard.Generate(color);
+                Check(selected is int p && !deferred.Contains(p), "tactic#21 selects available alternative");
+            }
+            var captureBoard = new Board(size);
+            Check(new[] { target + 2, target + 1 - size, target + 1 + size }
+                .All(p => captureBoard.Play(color, p))
+                && captureBoard.Play(3 - color, target + 1)
+                && captureBoard.Play(3 - color, target + size), "tactic#21 capture fixture legal");
+            Check(!captureBoard.ShouldDeferExposedSingle(color, target), "tactic#21 capture exception");
+        }
+        foreach (int size in new[] { 9, 19 })
+        foreach (int color in new[] { 1, 2 })
+        {
+            var splitBoard = new Board(size);
+            int target = 3 * size + 4;
+            Check(splitBoard.Play(color, 3 * size + 2) && splitBoard.Play(3 - color, 4 * size + 3),
+                "tactic#17 one-space fixture legal");
+            string key = splitBoard.PositionKey; int before = splitBoard.MoveCount;
+            Check(splitBoard.ShouldDeferOneSpaceSplit(color, target) == (size == 9),
+                "tactic#17 one-space deferral limited to nine");
+            Check(splitBoard.PositionKey == key && splitBoard.MoveCount == before, "tactic#17 root unchanged");
+            if (size == 9)
+            {
+                var deferred = Enumerable.Range(0, size * size)
+                    .Where(p => splitBoard.ShouldDeferOneSpaceSplit(color, p)).ToHashSet();
+                int? selected = splitBoard.Generate(color);
+                Check(selected is int p && !deferred.Contains(p), "tactic#17 selects available alternative");
+            }
+        }
         // 空き三角は通常候補を後回しにし、観測は盤面を変更しない。
         foreach (int size in new[] { 5, 9, 19 })
         foreach (int color in new[] { 1, 2 })

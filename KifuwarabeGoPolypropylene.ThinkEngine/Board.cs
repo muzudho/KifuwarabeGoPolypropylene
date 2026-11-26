@@ -192,7 +192,7 @@ public sealed class Board(int size)
         return count;
     }
 
-    // 戦術#1候補。一手で完成する二眼を調べる。まだ着手選択には適用しない。
+    // 戦術#1の二眼候補。戦術#23では9路の着手選択にも使用する。
     public IReadOnlyList<int> FindTwoEyeCompletingMoves(int color)
     {
         if (color is not (1 or 2)) throw new ArgumentException("invalid color");
@@ -603,6 +603,59 @@ public sealed class Board(int size)
         return !(trial.StonesLostToImmediateReply(color, point) > 0
             && trial.HasSafeSnapback(color, point, history));
     }
+    // 戦術#17：一間の割込みを許す形を9路の通常候補だけ後回しにする。
+    // 救出等の既存優先順位は維持し、捕獲・生き壁の局所防御は除外する。
+    internal bool ShouldDeferOneSpaceSplit(int color, int point)
+    {
+        if (Size != 9 || !KifuwarabeGoPolypropylene.Domain.LocalPatterns.SplitShape.SplitShapePattern
+                .MatchesOneSpace(cells, Size, color, point)) return false;
+        if (Neighbors(point).Any(p => cells[p] == color && HasTwoEyes(color, p))) return false;
+        var trial = Copy();
+        if (!trial.Play(color, point)
+            || trial.cells.Count(c => c == 3 - color) < cells.Count(c => c == 3 - color)) return false;
+        return !(trial.StonesLostToImmediateReply(color, point) > 0
+            && trial.HasSafeSnapback(color, point, history));
+    }
+    // 戦術#21：敵に接する二呼吸点の孤立単石を、9路の通常候補だけ後回しにする。
+    // すぐアタリを掛けられて救出に追われる形を減らす試み。捨て石を禁止しない。
+    internal bool ShouldDeferExposedSingle(int color, int point)
+    {
+        if (Size != 9 || (uint)point >= (uint)cells.Length || cells[point] != 0) return false;
+        var adjacent = Neighbors(point).ToArray();
+        if (adjacent.Any(p => cells[p] == color)
+            || !adjacent.Any(p => cells[p] == 3 - color)
+            || adjacent.Count(p => cells[p] == 0) != 2) return false;
+        var trial = Copy();
+        return trial.Play(color, point)
+            && trial.cells.Count(c => c == 3 - color) == cells.Count(c => c == 3 - color);
+    }
+    // 戦術#22：候補の最大四隣に新しい一目眼を同一連で囲う手を9路で試す。
+    // 一眼は生きの証明ではない。既存の地・眼・合法性・取り返し検査は維持する。
+    internal bool FormsSinglePointEye(int color, int point)
+    {
+        if (Size != 9 || (uint)point >= (uint)cells.Length || cells[point] != 0) return false;
+        if (Neighbors(point).Any(q => cells[q] == color && HasTwoEyes(color, q))) return false;
+        bool LocalEye(Board board, int eye)
+        {
+            if (board.cells[eye] != 0) return false;
+            var boundary = board.Neighbors(eye).ToArray();
+            if (boundary.Any(q => board.cells[q] != color)) return false;
+            var group = board.Group(board.cells, boundary[0]).stones;
+            if (boundary.Any(q => !group.Contains(q))) return false;
+            int enemies = 0;
+            for (int dx = -1; dx <= 1; dx += 2)
+                for (int dy = -1; dy <= 1; dy += 2)
+                {
+                    int x = eye % Size + dx, y = eye / Size + dy;
+                    if (x >= 0 && x < Size && y >= 0 && y < Size && board.At(x, y) == 3 - color) enemies++;
+                }
+            bool edge = eye % Size == 0 || eye % Size == Size - 1 || eye / Size == 0 || eye / Size == Size - 1;
+            return enemies <= (edge ? 0 : 1);
+        }
+        var after = Copy();
+        if (!after.Play(color, point)) return false;
+        return Neighbors(point).Any(q => !LocalEye(this, q) && LocalEye(after, q));
+    }
     public int? Generate(int color)
     {
         if (color is not (1 or 2)) throw new ArgumentException("invalid color");
@@ -612,6 +665,8 @@ public sealed class Board(int size)
         var rescues = AtariRescuePoints(color);
         var splits = FindSmallInvasionAtariMoves(color);
         var singleRescues = FindSafeSingleStoneRescueMoves(color);
+        // 戦術#23：9路の二眼完成を通常の形回避より優先。既存緊急手と除外検査は維持。
+        var twoEyeCompletions = Size == 9 ? FindTwoEyeCompletingMoves(color) : Array.Empty<int>();
         // 戦術#12: 空盤の初手だけ小目C4を優先し、通常の戦訓検査を通す。
         bool komokuOpening = Size >= 9 && MoveCount == 0 && cells.All(c => c == 0);
         int komoku = 3 * Size + 2;
@@ -633,8 +688,14 @@ public sealed class Board(int size)
             .ThenByDescending(invasionCaptures.Contains)
             .ThenBy(p => splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue)
             .ThenByDescending(singleRescues.Contains)
+            .ThenByDescending(twoEyeCompletions.Contains)
+            .ThenByDescending(p => FormsSinglePointEye(color, p))
             .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
                 && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferEmptyTriangle(color, p))
+            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
+                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferOneSpaceSplit(color, p))
+            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
+                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferExposedSingle(color, p))
             .ThenByDescending(p => komokuOpening && p == komoku)
             .ThenBy(p => openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue)
             .ThenBy(p => expandOpening ? LinePenalty(p) : 0)
@@ -682,7 +743,11 @@ public sealed class Board(int size)
                 Observe("capture-reversal", "石を取った直後に、それより多くの味方を取られた");
                 continue;
             }
+            bool completedTwoEyes = twoEyeCompletions.Contains(p);
+            bool formedSinglePointEye = FormsSinglePointEye(color, p);
             Play(color, p);
+            if (completedTwoEyes) tacticApplications.Add(new("complete-two-eyes", MoveCount, color, p));
+            if (formedSinglePointEye) tacticApplications.Add(new("form-single-point-eye", MoveCount, color, p));
             if (komokuOpening && p == komoku) tacticApplications.Add(new("komoku-opening", MoveCount, color, p));
             if (!komokuOpening && openCorners.Contains(p)) tacticApplications.Add(new("komoku-corner-plan", MoveCount, color, p));
             if (expandOpening && LinePenalty(p) == 0 && !openCorners.Contains(p)

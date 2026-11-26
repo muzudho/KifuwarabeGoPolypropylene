@@ -188,12 +188,35 @@ internal static class SelfTest
             Check(small.FindOpenCornerKomokuMoves().Count == 0 && small.FindPlannedCornerPoints(1).Count == 0,
                 "tactic#13 small research boards unchanged");
         }
+        // 戦術#24：局所アタリの救出は空き角への展開より優先する。
+        foreach (int cornerColor in new[] { 1, 2 })
+        for (int cornerSym = 0; cornerSym < 8; cornerSym++)
+        {
+            int CornerMap(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if (cornerSym >= 4) x = 8 - x;
+                for (int i = 0; i < cornerSym % 4; i++) (x, y) = (y, 8 - x);
+                return x + y * 9;
+            }
+            var urgentCorner = new Board(9);
+            Check(urgentCorner.Play(cornerColor, CornerMap(29)), "tactic#24 rescue root");
+            foreach (int q in new[] { 28, 30, 20 })
+                Check(urgentCorner.Play(3 - cornerColor, CornerMap(q)), "tactic#24 surround root");
+            Check(urgentCorner.Generate(cornerColor) == CornerMap(38), "tactic#24 rescue before open corner");
+            var contactedCorner = new Board(9);
+            Check(contactedCorner.Play(cornerColor, CornerMap(29))
+                && contactedCorner.Play(3 - cornerColor, CornerMap(20)), "tactic#24 contact root");
+            var remainingCorners = contactedCorner.FindOpenCornerKomokuMoves().ToArray();
+            Check(contactedCorner.Generate(cornerColor) is int q2 && remainingCorners.Contains(q2),
+                "tactic#24 chooses unclaimed corner in each symmetry");
+        }
         var contactOpening = new Board(9);
         contactOpening.Play(1, 29);
         contactOpening.Play(2, 20);
         contactOpening.Generate(1);
-        Check(!contactOpening.TacticApplications.Any(a => a.Id == "komoku-corner-plan"),
-            "tactic#13 contact fight disables corner opening priority");
+        Check(contactOpening.TacticApplications.Any(a => a.Id == "komoku-corner-plan"),
+            "tactic#24 contact alone preserves open corner priority");
         var lateOpening = new Board(9);
         for (int i = 0; i < 8; i++) lateOpening.Play(1, null);
         lateOpening.Generate(1);
@@ -220,7 +243,7 @@ internal static class SelfTest
             int point = selected!.Value;
             int edge = Math.Min(Math.Min(point % 9, 8 - point % 9), Math.Min(point / 9, 8 - point / 9));
             Check(edge is 2 or 3, "tactic#14 ordinary opening uses third or fourth line");
-            Check(boundaryOpening.TacticApplications.Any(t => t.Id == "opening-lines"), "tactic#14 actual application recorded");
+            Check(boundaryOpening.TacticApplications.Any(t => t.Id is "opening-lines" or "komoku-corner-plan"), "tactic#14 actual application recorded");
         }
         foreach (int size in new[] { 9, 19 })
         foreach (int color in new[] { 1, 2 })

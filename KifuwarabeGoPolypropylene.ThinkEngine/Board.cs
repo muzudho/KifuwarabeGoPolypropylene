@@ -670,8 +670,9 @@ public sealed class Board(int size)
         // 戦術#12: 空盤の初手だけ小目C4を優先し、通常の戦訓検査を通す。
         bool komokuOpening = Size >= 9 && MoveCount == 0 && cells.All(c => c == 0);
         int komoku = 3 * Size + 2;
-        bool cornerOpening = MoveCount < 8 && !Enumerable.Range(0, cells.Length)
-            .Any(p => cells[p] != 0 && Neighbors(p).Any(n => cells[n] == 3 - cells[p]));
+        // 戦術#24：9路序盤は他所の接触だけで空き角への展開を解除しない。緊急順位は維持。
+        bool cornerOpening = MoveCount < 8 && (Size == 9 || !Enumerable.Range(0, cells.Length)
+            .Any(p => cells[p] != 0 && Neighbors(p).Any(n => cells[n] == 3 - cells[p])));
         var openCorners = cornerOpening ? FindOpenCornerKomokuMoves() : Array.Empty<int>();
         var plannedCorners = FindPlannedCornerPoints(color);
         // 戦術#14: 通常候補は三/四線から。手数だけで解除せず、生きた壁の局所防御は従来順を守る。

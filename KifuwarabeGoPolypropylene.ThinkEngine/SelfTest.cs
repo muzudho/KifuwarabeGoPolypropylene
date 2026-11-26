@@ -10,6 +10,7 @@ internal static class SelfTest
             if (!ok) throw new InvalidOperationException("FAIL: " + name);
             count++;
         }
+        LocalPatternSelfTest.Run(Check);
         // 空盤だけの布石。後手の初着手やパス後へ拡張しない。
         foreach (int size in new[] { 9, 13, 19 })
         foreach (int color in new[] { 1, 2 })

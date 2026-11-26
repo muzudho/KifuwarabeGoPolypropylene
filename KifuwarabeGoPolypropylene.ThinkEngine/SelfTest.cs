@@ -11,6 +11,41 @@ internal static class SelfTest
             count++;
         }
         LocalPatternSelfTest.Run(Check);
+        // 空き三角は通常候補を後回しにし、観測は盤面を変更しない。
+        foreach (int size in new[] { 5, 9, 19 })
+        foreach (int color in new[] { 1, 2 })
+        {
+            var triangleBoard = new Board(size);
+            Check(triangleBoard.Play(color, 1) && triangleBoard.Play(color, size), "tactic#16 candidate fixture legal");
+            string before = triangleBoard.PositionKey; int moveCount = triangleBoard.MoveCount;
+            Check(triangleBoard.ShouldDeferEmptyTriangle(color, 0), "tactic#16 triangle deferred on every size");
+            Check(triangleBoard.PositionKey == before && triangleBoard.MoveCount == moveCount, "tactic#16 leaves root unchanged");
+            var deferred = Enumerable.Range(0, size * size).Where(p => triangleBoard.ShouldDeferEmptyTriangle(color, p)).ToHashSet();
+            int? selected = triangleBoard.Generate(color);
+            Check(selected is int p && !deferred.Contains(p), "tactic#16 chooses available non-triangle");
+            Check(triangleBoard.MoveCount == moveCount + 1, "tactic#16 generates exactly one move");
+            int target = 2 * size + 2;
+            var capture = new Board(size);
+            Check(capture.Play(3 - color, target - 1)
+                && new[] { target + 1, target + size, target - 2, target - 1 - size, target - 1 + size }.All(p => capture.Play(color, p)), "tactic#16 capture fixture legal");
+            Check(!capture.ShouldDeferEmptyTriangle(color, target), "tactic#16 capture allowed");
+        }
+        // 団子の形でも捕獲に必要なら後回しにせず、19路には新順位を使わない。
+        foreach (int size in new[] { 9, 19 })
+        foreach (int color in new[] { 1, 2 })
+        {
+            int target = 4 * size + 4;
+            var plain = new Board(size);
+            Check(new[] { target + 1, target + size, target + size + 1 }.All(p => plain.Play(color, p)), "tactic#20 plain fixture legal");
+            string before = plain.PositionKey; int countBefore = plain.MoveCount;
+            Check(plain.ShouldDeferDumpling(color, target) == (size == 9), "tactic#20 limited to nine lines");
+            Check(plain.PositionKey == before && plain.MoveCount == countBefore, "tactic#20 observation leaves root unchanged");
+            if (size != 9) continue;
+            var capture = new Board(size);
+            Check(capture.Play(3 - color, target - 1)
+                && new[] { target + 1, target + size, target + size + 1, target - 2, target - 1 - size, target - 1 + size }.All(p => capture.Play(color, p)), "tactic#20 capture fixture legal");
+            Check(!capture.ShouldDeferDumpling(color, target), "tactic#20 capture exception");
+        }
         // 空盤だけの布石。後手の初着手やパス後へ拡張しない。
         foreach (int size in new[] { 9, 13, 19 })
         foreach (int color in new[] { 1, 2 })

@@ -577,6 +577,32 @@ public sealed class Board(int size)
             .SelectMany(plan => plan.inside).Where(p => cells[p] == 0).ToHashSet();
     }
     // 合法性と戦訓は分離する。相手の合法手を戦訓で拒否しない。
+    // 戦術#20：9路の通常同順位候補で、2×2の詰め込みを後回しにする。
+    // 形だけで禁止せず、実捕獲と安全なウッテガエシは従来どおり許す。
+    // 必要な連絡や長期の損得すべてを判定するものではない。
+    internal bool ShouldDeferDumpling(int color, int point)
+    {
+        if (Size != 9 || !KifuwarabeGoPolypropylene.Domain.LocalPatterns.DumplingStones.DumplingStonesPattern.Matches(cells, Size, color, point)) return false;
+        var trial = Copy();
+        if (!trial.Play(color, point)
+            || trial.cells.Count(c => c == 3 - color) < cells.Count(c => c == 3 - color)) return false;
+        return !(trial.StonesLostToImmediateReply(color, point) > 0
+            && trial.HasSafeSnapback(color, point, history));
+    }
+    // 戦術#16：候補点の相対八方向だけを調べ、空き三角を通常候補の後ろへ回す。
+    // 全盤の形の走査はしない。禁止ではなく、代替候補がなければ着手できる。
+    // 捕獲と安全なウッテガエシは除外し、緊急救出等の順位もこの判定より先に保つ。
+    internal bool ShouldDeferEmptyTriangle(int color, int point)
+    {
+        if (!KifuwarabeGoPolypropylene.Domain.LocalPatterns.EmptyTriangle.EmptyTrianglePattern.Matches(cells, Size, color, point)) return false;
+        // 二眼の生き壁に接する局所防御は、従来の侵入対処を維持する。
+        if (Neighbors(point).Any(p => cells[p] == color && HasTwoEyes(color, p))) return false;
+        var trial = Copy();
+        if (!trial.Play(color, point)
+            || trial.cells.Count(c => c == 3 - color) < cells.Count(c => c == 3 - color)) return false;
+        return !(trial.StonesLostToImmediateReply(color, point) > 0
+            && trial.HasSafeSnapback(color, point, history));
+    }
     public int? Generate(int color)
     {
         if (color is not (1 or 2)) throw new ArgumentException("invalid color");
@@ -607,9 +633,12 @@ public sealed class Board(int size)
             .ThenByDescending(invasionCaptures.Contains)
             .ThenBy(p => splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue)
             .ThenByDescending(singleRescues.Contains)
+            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
+                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferEmptyTriangle(color, p))
             .ThenByDescending(p => komokuOpening && p == komoku)
             .ThenBy(p => openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue)
-            .ThenBy(p => expandOpening ? LinePenalty(p) : 0))
+            .ThenBy(p => expandOpening ? LinePenalty(p) : 0)
+            .ThenBy(p => expandOpening && ShouldDeferDumpling(color, p)))
         {
             if (protectedOwners[p] == color) continue;
             if (plannedCorners.Contains(p) && !rescues.ContainsKey(p)

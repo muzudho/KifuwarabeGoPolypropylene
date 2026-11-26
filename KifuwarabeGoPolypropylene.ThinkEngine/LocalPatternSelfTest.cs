@@ -28,7 +28,7 @@ internal static class LocalPatternSelfTest
                 cells[Map(diagonal ? 1 : 0, 1)] = color;
                 cells[Map(diagonal ? 0 : 1, 1)] = wildcard;
                 string before = string.Join(',', cells);
-                check(EmptyTrianglePattern.Matches(cells, size, color, target), "local triangle two templates and wildcard");
+                check(EmptyTrianglePattern.Matches(cells, size, color, target) == (wildcard == 0), "local empty triangle requires empty fourth point");
                 check(DumplingStonesPattern.Matches(cells, size, color, target) == (wildcard == color), "local dumpling distinguished from triangle");
                 check(string.Join(',', cells) == before, "local pattern reads do not mutate board");
             }

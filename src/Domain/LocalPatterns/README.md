@@ -2,7 +2,7 @@
 
 着手前の空点Tを原点に、指定された近傍だけを読む幾何検出。クラスの日本語XMLコメントに盤面例、相対座標、対象外の判断を記載している。
 
-- EmptyTriangle/EmptyTrianglePattern.cs：空き三角。指定外点はワイルドカード。団子石と同時一致する場合もある。
+- EmptyTriangle/EmptyTrianglePattern.cs：空き三角。2×2の三隅が自石になり、残り一隅が空点であることを要求する。残りが敵石の三角や自石の団子石とは区別する。
 - DumplingStones/DumplingStonesPattern.cs：Tを含む2×2充填。最大四つの小領域だけを確認する。
 - SplitShape/SplitShapePattern.cs：割かれ形。相手石一つ・自石一つの二点の型を八対称で確認する。
 - LocalPatternMatcher.cs：入力確認、相対座標の対称変換、盤外確認を共有する。

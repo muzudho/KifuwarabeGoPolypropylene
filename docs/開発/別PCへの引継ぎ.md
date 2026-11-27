@@ -123,3 +123,6 @@ Copy-Release.ps1とRegister-LocalEntry.ps1の既定値は旧PCの絶対パスで
 
 
 2026-11-27 17:50:41 新3系団子回避の要求は17:47:03 JST accepted。primary3・実3系36520/running・四配布ハッシュ/検証時ソース一致を確認。CGOS1706536対plum1993・9路コミ7は進行中、結果未確定。NAS174624-seed2026142804/deployment-accepted.json、旧1系544B/正常2保持。次35/5。
+
+
+2026-11-27 18:05:27 利用者の明示依頼によりGitHub初回公開v0.1.0を作成済み：https://github.com/muzudho/KifuwarabeGoPolypropylene/releases/tag/v0.1.0 。対象commit cc389844b4f1fc70ac623ad498053c382020b03b、主系3/F60Fと同一四バイナリーのZIPとSHA256SUMS。ZIP内六ファイルの内容ハッシュ照合、公開asset二件確認。内部GTP versionは0.4.0のまま、.NET10要件/GUI・ラッパー別/暫定採点をリリース説明へ明記。稼働物/主系設定変更なし。NAS release-v0.1.0へ梱包とnotes保存。将来の追加公開を自動許可したものではない。

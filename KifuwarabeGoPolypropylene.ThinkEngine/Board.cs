@@ -711,16 +711,16 @@ public sealed class Board(int size)
     }
     // 戦術#21：敵に接する二呼吸点の孤立単石を、9路の通常候補だけ後回しにする。
     // すぐアタリを掛けられて救出に追われる形を減らす試み。捨て石を禁止しない。
-    // 戦術#35：援軍なしで敵の直線三石へ触れる三呼吸点単石も通常候補で後回し。
+    // 戦術#35：9/19路では、援軍なしで敵の直線三石へ触れる三呼吸点単石も後回し。
     // 斜めに味方がある接触、捕獲、敵へのアタリはこの追加条件から除く。
     internal bool ShouldDeferExposedSingle(int color, int point)
     {
-        if (Size != 9 || (uint)point >= (uint)cells.Length || cells[point] != 0) return false;
+        if (Size is not (9 or 19) || (uint)point >= (uint)cells.Length || cells[point] != 0) return false;
         var adjacent = Neighbors(point).ToArray();
         if (adjacent.Any(p => cells[p] == color)
             || !adjacent.Any(p => cells[p] == 3 - color)) return false;
         int empty = adjacent.Count(p => cells[p] == 0);
-        bool oldExposed = empty == 2;
+        bool oldExposed = Size == 9 && empty == 2;
         bool strongLine = false;
         if (!oldExposed && adjacent.Length == 4 && empty == 3)
         {

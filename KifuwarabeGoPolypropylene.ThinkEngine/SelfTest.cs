@@ -499,6 +499,25 @@ internal static class SelfTest
             int? selected=root.Generate(owner);
             Check(selected is int p && !deferred[p],"non-dumpling before line preference");
         }
+        // 戦術#35：敵三石へ単独で触れる手と、離した味方を使う接触を区別。
+        for(int swap=0;swap<2;swap++)
+        for(int symmetry=0;symmetry<8;symmetry++)
+        {
+            int ContactColor(int c)=>swap==0?c:3-c;
+            int MapContact(int p){int x=p%9,y=p/9;if(symmetry>=4)x=8-x;for(int k=0;k<symmetry%4;k++)(x,y)=(8-y,x);return y*9+x;}
+            var root=new Board(9);
+            foreach(int p in new[]{58,67,76})Check(root.Play(ContactColor(2),MapContact(p)),"strong line setup");
+            string before=root.PositionKey;
+            Check(root.ShouldDeferExposedSingle(ContactColor(1),MapContact(49)),"unsupported strong line contact deferred");
+            Check(!root.ShouldDeferExposedSingle(ContactColor(1),MapContact(40)),"stand-off not contact");
+            Check(root.PositionKey==before&&root.MoveCount==3,"contact detection nonmutating");
+            Check(root.Play(ContactColor(1),MapContact(40)),"stand-off support");
+            Check(root.Play(ContactColor(2),MapContact(49)),"enemy approaches support");
+            Check(!root.ShouldDeferExposedSingle(ContactColor(1),MapContact(48)),"diagonal support contact allowed");
+            var shorter=new Board(9);
+            foreach(int p in new[]{58,67})Check(shorter.Play(ContactColor(2),MapContact(p)),"short line setup");
+            Check(!shorter.ShouldDeferExposedSingle(ContactColor(1),MapContact(49)),"two enemy stones not three");
+        }
         var contactOpening = new Board(9);
         contactOpening.Play(1, 29);
         contactOpening.Play(2, 20);

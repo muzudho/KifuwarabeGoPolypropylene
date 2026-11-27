@@ -711,16 +711,43 @@ public sealed class Board(int size)
     }
     // 戦術#21：敵に接する二呼吸点の孤立単石を、9路の通常候補だけ後回しにする。
     // すぐアタリを掛けられて救出に追われる形を減らす試み。捨て石を禁止しない。
+    // 戦術#35：援軍なしで敵の直線三石へ触れる三呼吸点単石も通常候補で後回し。
+    // 斜めに味方がある接触、捕獲、敵へのアタリはこの追加条件から除く。
     internal bool ShouldDeferExposedSingle(int color, int point)
     {
         if (Size != 9 || (uint)point >= (uint)cells.Length || cells[point] != 0) return false;
         var adjacent = Neighbors(point).ToArray();
         if (adjacent.Any(p => cells[p] == color)
-            || !adjacent.Any(p => cells[p] == 3 - color)
-            || adjacent.Count(p => cells[p] == 0) != 2) return false;
+            || !adjacent.Any(p => cells[p] == 3 - color)) return false;
+        int empty = adjacent.Count(p => cells[p] == 0);
+        bool oldExposed = empty == 2;
+        bool strongLine = false;
+        if (!oldExposed && adjacent.Length == 4 && empty == 3)
+        {
+            int x=point%Size,y=point/Size;
+            bool diagonalFriend=false;
+            foreach(int dx in new[]{-1,1})
+            foreach(int dy in new[]{-1,1})
+                if((uint)(x+dx)<(uint)Size && (uint)(y+dy)<(uint)Size
+                    && At(x+dx,y+dy)==color) diagonalFriend=true;
+            if(!diagonalFriend)
+            foreach(var direction in new[]{(1,0),(-1,0),(0,1),(0,-1)})
+            {
+                bool line=true;
+                for(int step=1;step<=3;step++)
+                {
+                    int nx=x+direction.Item1*step,ny=y+direction.Item2*step;
+                    if((uint)nx>=(uint)Size || (uint)ny>=(uint)Size || At(nx,ny)!=3-color) {line=false;break;}
+                }
+                if(line){strongLine=true;break;}
+            }
+        }
+        if(!oldExposed && !strongLine) return false;
         var trial = Copy();
         return trial.Play(color, point)
-            && trial.cells.Count(c => c == 3 - color) == cells.Count(c => c == 3 - color);
+            && trial.cells.Count(c => c == 3 - color) == cells.Count(c => c == 3 - color)
+            && (!strongLine || adjacent.Where(p=>cells[p]==3-color)
+                .All(p=>trial.NeighborsOfGroup(p).Take(2).Count()>=2));
     }
     // 戦術#22：候補の最大四隣に新しい一目眼を同一連で囲う手を9路で試す。
     // 一眼は生きの証明ではない。既存の地・眼・合法性・取り返し検査は維持する。

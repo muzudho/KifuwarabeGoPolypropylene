@@ -10,6 +10,37 @@ internal static class SelfTest
             if (!ok) throw new InvalidOperationException("FAIL: " + name);
             count++;
         }
+        // 戦術#18：実戦1706435の白8F3。最終同順位で隣接伸びE3よりコスミを検討する。
+        int[] expansionHistory = {29,50,33,31,47,24,21};
+        for (int swap=0; swap<2; swap++)
+        for (int symmetry=0; symmetry<8; symmetry++)
+        {
+            int MapExpansion(int p) { int x=p%9,y=p/9; if(symmetry>=4)x=8-x; for(int k=0;k<symmetry%4;k++)(x,y)=(y,8-x); return y*9+x; }
+            int ExpansionColor(int c)=>swap==0?c:3-c;
+            Board ExpansionReplay() { var b=new Board(9); for(int i=0;i<expansionHistory.Length;i++)Check(b.Play(ExpansionColor(i%2+1),MapExpansion(expansionHistory[i])),"expansion history"); return b; }
+            var root=ExpansionReplay(); string before=root.PositionKey;
+            Check(root.IsOpeningKosumiExpansion(ExpansionColor(2),MapExpansion(23)),"expansion kosumi accepted");
+            Check(!root.IsOpeningKosumiExpansion(ExpansionColor(2),MapExpansion(22)),"adjacent stretch not kosumi");
+            Check(root.PositionKey==before&&root.MoveCount==7,"expansion nonmutating");
+            if(swap==0&&symmetry==0)Check(root.Generate(2)==23,"actual opponent expansion reproduced");
+            foreach(int bridge in new[]{22,32})
+            {
+                var blocked=ExpansionReplay();
+                Check(blocked.Play(ExpansionColor(2),null),"bridge setup pass");
+                Check(blocked.Play(ExpansionColor(1),MapExpansion(bridge)),"bridge occupied");
+                Check(!blocked.IsOpeningKosumiExpansion(ExpansionColor(2),MapExpansion(23)),"occupied bridge not expansion");
+            }
+            var enclosed=new Board(9); Check(enclosed.Play(ExpansionColor(1),MapExpansion(29)),"enclosed kosumi anchor");
+            foreach(int p in new[]{28,38,19,11,31,39})Check(enclosed.Play(ExpansionColor(2),MapExpansion(p)),"enclosed kosumi boundary");
+            Check(!enclosed.IsOpeningKosumiExpansion(ExpansionColor(1),MapExpansion(21)),"narrow connection not expansion");
+            foreach(int moveCount in new[]{3,24,398,399})
+            {
+                var boundary=ExpansionReplay();
+                typeof(Board).GetProperty(nameof(Board.MoveCount))!.SetValue(boundary,moveCount);
+                Check(!boundary.IsOpeningKosumiExpansion(ExpansionColor(2),MapExpansion(23)),"expansion move window");
+            }
+            Check(!new Board(19).IsOpeningKosumiExpansion(ExpansionColor(2),MapExpansion(23)),"expansion restricted to nine");
+        }
         // 戦術#20：実戦1706363白58F2。別の連が二眼でも通常の団子回避を解除しない。
         int?[] postLifeGame = { 48, 29, 33, 51, 41, 21, 50, 22, 60, 23, 37, 24, 28, 38, 47, 42, 52, 43, 34, 44, 53, 56, 55, 57, 64, 58, 35, 49, 40, 59, 39, 20, 68, 10, 67, 16, 19, 70, 69, 61, 9, 11, 66, 3, 25, 4, 17, 13, 45, 1, 46, 0, 18, 5, 7, 6, 15 };
         foreach (int postLifeColor in new[] { 1, 2 })
@@ -400,6 +431,73 @@ internal static class SelfTest
             var remainingCorners = contactedCorner.FindOpenCornerKomokuMoves().ToArray();
             Check(contactedCorner.Generate(cornerColor) is int q2 && remainingCorners.Contains(q2),
                 "tactic#24 chooses unclaimed corner in each symmetry");
+        }
+        // 戦術#24：19路も離れた角へ展開する。接触・非接触と局所アタリを色/八対称で区別。
+        foreach (int cornerSize in new[] { 9, 19 })
+        foreach (int cornerSide in new[] { 1, 2 })
+        for (int direction = 0; direction < 8; direction++)
+        foreach (string kind in new[] { "contact", "quiet", "atari" })
+        {
+            int MapCorner(int x, int y)
+            {
+                if ((direction & 4) != 0) x = cornerSize - 1 - x;
+                for (int i = 0; i < (direction & 3); i++) (x, y) = (cornerSize - 1 - y, x);
+                return y * cornerSize + x;
+            }
+            var opening = new Board(cornerSize);
+            int far = cornerSize - 4;
+            int[] setup = kind == "atari"
+                ? new[] { MapCorner(2, 3), MapCorner(1, 3), MapCorner(far, 3), MapCorner(3, 3), MapCorner(far, far), MapCorner(2, 4) }
+                : new[] { MapCorner(2, 3), MapCorner(far, far), MapCorner(far, 3), kind == "contact" ? MapCorner(3, 3) : MapCorner(far - 1, far) };
+            for (int i = 0; i < setup.Length; i++)
+                Check(opening.Play(i % 2 == 0 ? cornerSide : 3 - cornerSide, setup[i]), "tactic#24 legal opening fixture");
+            var available = opening.FindOpenCornerKomokuMoves().ToArray();
+            int? choice = opening.Generate(cornerSide);
+            Check(kind == "atari" ? choice == MapCorner(2, 2) : choice is int q && available.Contains(q),
+                "tactic#24 unclaimed corner unless local atari needs rescue");
+        }
+        // 戦術#34：伸びの後回しを、捕獲・アタリ・連絡と区別する。
+        foreach (int side in new[] { 1, 2 })
+        for (int direction = 0; direction < 8; direction++)
+        foreach (string kind in new[] { "ordinary", "open", "connect", "atari", "capture" })
+        {
+            int Map(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if ((direction & 4) != 0) x = 8 - x;
+                for (int i = 0; i < (direction & 3); i++) (x, y) = (8 - y, x);
+                return y * 9 + x;
+            }
+            var extension = new Board(9);
+            Check(extension.Play(side, Map(48)), "tactic#34 friendly root");
+            foreach (int q in new[] { 56, 58, 66 })
+            {
+                if (kind == "open" && q == 66) continue;
+                Check(extension.Play(kind == "connect" && q == 56 ? side : 3-side, Map(q)), "tactic#34 surrounding root");
+            }
+            if (kind is "atari" or "capture")
+                foreach (int q in new[] { 47, 65 }) Check(extension.Play(side, Map(q)), "tactic#34 counterexample root");
+            if (kind == "capture") Check(extension.Play(side, Map(55)), "tactic#34 capture root");
+            string unchanged = extension.PositionKey;
+            Check(extension.ShouldDeferEnclosedExtension(side, Map(57)) == (kind == "ordinary"),
+                "tactic#34 keeps capture atari connection and open extension");
+            Check(extension.PositionKey == unchanged, "tactic#34 detector does not play");
+        }
+        // 戦術#20：実戦1706524の黒39H6は同じ連を詰める団子。三四線だけで選ばない。
+        int[] dumplingLineHistory = { 29,50,33,48,21,37,23,42,31,34,24,56,38,46,58,49,57,59,60,68,51,43,16,47,13,28,10,69,11,41,64,65,55,19,70,53,61,79 };
+        for(int swap=0;swap<2;swap++)
+        for(int symmetry=0;symmetry<8;symmetry++)
+        {
+            int MapDumplingLine(int p) { int x=p%9,y=p/9; if(symmetry>=4)x=8-x; for(int k=0;k<symmetry%4;k++)(x,y)=(8-y,x); return y*9+x; }
+            int DumplingLineColor(int c)=>swap==0?c:3-c;
+            var root=new Board(9);
+            for(int i=0;i<dumplingLineHistory.Length;i++)
+                Check(root.Play(DumplingLineColor(i%2+1),MapDumplingLine(dumplingLineHistory[i])),"dumpling-line actual history");
+            int owner=DumplingLineColor(1);
+            Check(root.ShouldDeferDumpling(owner,MapDumplingLine(52)),"actual H6 dumpling");
+            var deferred=Enumerable.Range(0,81).Select(p=>root.ShouldDeferDumpling(owner,p)).ToArray();
+            int? selected=root.Generate(owner);
+            Check(selected is int p && !deferred[p],"non-dumpling before line preference");
         }
         var contactOpening = new Board(9);
         contactOpening.Play(1, 29);

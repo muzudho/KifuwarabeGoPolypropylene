@@ -807,6 +807,76 @@ public sealed class Board(int size)
         return !Captured(after,3-color,3);
     }
 
+    // 戦術#18：序盤の最終同順位でコスミによる展開を検討する。
+    // 両切断への短い合法連絡だけを確認し、シチョウ・長期生きは保証しない。
+    internal bool IsOpeningKosumiExpansion(int color, int point)
+    {
+        if (Size != 9 || MoveCount < 4 || MoveCount >= 24 || IsFinished
+            || point < 0 || point >= cells.Length || cells[point] != 0) return false;
+        Board Clone(Board source)
+        {
+            var copy = source.Copy();
+            copy.history.UnionWith(source.history);
+            return copy;
+        }
+        var after = Clone(this);
+        if (!after.Play(color, point)
+            || after.cells.Count(c => c == 3 - color) != cells.Count(c => c == 3 - color)
+            || after.NeighborsOfGroup(point).Take(4).Count() < 4
+            || after.StonesLostToImmediateReply(color, point) != 0) return false;
+        int x = point % Size, y = point / Size;
+        foreach (int dx in new[] { -1, 1 })
+        foreach (int dy in new[] { -1, 1 })
+        {
+            int nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= Size || ny < 0 || ny >= Size) continue;
+            int diagonal = ny * Size + nx, a = y * Size + nx, b = ny * Size + x;
+            if (cells[diagonal] != color || cells[a] != 0 || cells[b] != 0
+                || after.Group(after.cells, point).stones.Contains(diagonal)) continue;
+            var original = after.Group(after.cells, point).stones;
+            original.UnionWith(after.Group(after.cells, diagonal).stones);
+            bool both = true;
+            foreach (var (cut, reply) in new[] { (a, b), (b, a) })
+            {
+                var branch = Clone(after);
+                if (!branch.Play(3 - color, cut) || branch.IsFinished
+                    || original.Any(p => branch.cells[p] != color)
+                    || !branch.Play(color, reply)
+                    || original.Any(p => branch.cells[p] != color)
+                    || !original.All(branch.Group(branch.cells, point).stones.Contains)
+                    || branch.NeighborsOfGroup(point).Take(4).Count() < 4
+                    || branch.StonesLostToImmediateReply(color, point) != 0)
+                { both = false; break; }
+            }
+            if (both) return true;
+        }
+        return false;
+    }
+    /// <summary>
+    ///     <pre>
+    ///         ［戦術#34］呼吸点を増やさない、囲まれた伸びを後回しにする。
+    ///
+    ///             o
+    ///           o T o
+    ///             x
+    ///
+    ///         T が候補、x が味方、o が敵。捕獲やアタリには適用しない。
+    ///         着手禁止や死活の断定ではなく、他の通常候補との順位だけを変える。
+    ///     </pre>
+    /// </summary>
+    internal bool ShouldDeferEnclosedExtension(int color, int point)
+    {
+        if (Size != 9 || IsFinished || color is not (1 or 2)
+            || (uint)point >= (uint)cells.Length || cells[point] != 0) return false;
+        var adjacent = Neighbors(point).ToArray();
+        if (adjacent.Length != 4 || adjacent.Count(q => cells[q] == color) != 1
+            || adjacent.Count(q => cells[q] == 3-color) != 3) return false;
+        var trial = Copy();
+        int enemies = cells.Count(c => c == 3-color);
+        if (!trial.Play(color, point) || trial.cells.Count(c => c == 3-color) != enemies) return false;
+        return adjacent.Where(q => cells[q] == 3-color)
+            .All(q => trial.NeighborsOfGroup(q).Take(2).Count() >= 2);
+    }
     public int? Generate(int color)
     {
         if (color is not (1 or 2)) throw new ArgumentException("invalid color");
@@ -821,8 +891,8 @@ public sealed class Board(int size)
         // 戦術#12: 空盤の初手だけ小目C4を優先し、通常の戦訓検査を通す。
         bool komokuOpening = Size >= 9 && MoveCount == 0 && cells.All(c => c == 0);
         int komoku = 3 * Size + 2;
-        // 戦術#24：9路序盤は他所の接触だけで空き角への展開を解除しない。緊急順位は維持。
-        bool cornerOpening = MoveCount < 8 && (Size == 9 || !Enumerable.Range(0, cells.Length)
+        // 戦術#24：9/19路序盤は他所の接触だけで空き角への展開を解除しない。緊急順位は維持。
+        bool cornerOpening = MoveCount < 8 && (Size is 9 or 19 || !Enumerable.Range(0, cells.Length)
             .Any(p => cells[p] != 0 && Neighbors(p).Any(n => cells[n] == 3 - cells[p])));
         var openCorners = cornerOpening ? FindOpenCornerKomokuMoves() : Array.Empty<int>();
         var plannedCorners = FindPlannedCornerPoints(color);
@@ -849,11 +919,15 @@ public sealed class Board(int size)
                 && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferOneSpaceSplit(color, p))
             .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
                 && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferExposedSingle(color, p))
+            // 戦術#34：既存の緊急・眼・形の順位を維持し、通常の囲まれた伸びを後回し。
+            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
+                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferEnclosedExtension(color,p))
             .ThenByDescending(p => komokuOpening && p == komoku)
             .ThenBy(p => openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue)
+            // 戦術#20：団子回避を三四線の維持より先にし、空き角・緊急・眼の順位は保つ。
+            .ThenBy(p => ShouldDeferDumpling(color, p))
             .ThenBy(p => expandOpening ? LinePenalty(p) : 0)
-            // 戦術#20：別の連の二眼成立後も、通常候補の団子回避を維持する。
-            .ThenBy(p => ShouldDeferDumpling(color, p)))
+            .ThenByDescending(p => expandOpening && IsOpeningKosumiExpansion(color, p)))
         {
             if (protectedOwners[p] == color) continue;
             if (plannedCorners.Contains(p) && !rescues.ContainsKey(p)

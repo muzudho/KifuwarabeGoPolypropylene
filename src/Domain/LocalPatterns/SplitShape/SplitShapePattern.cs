@@ -32,6 +32,25 @@ namespace KifuwarabeGoPolypropylene.Domain.LocalPatterns.SplitShape;
 /// </summary>
 public static class SplitShapePattern
 {
+    /// <summary>
+    ///     <pre>
+    ///         ［割かれ形］敵の連を自分からまたぐ候補T。
+    ///             . T
+    ///             o o
+    ///             . x
+    ///         xは自石、oは敵石。Tから自石(0,-2)、敵石(0,-1)/(-1,-1)を八対称で読む。
+    ///         指定しない点は不問。一致だけで悪手とせず、救出・捕獲は評価側で確認する。
+    ///     </pre>
+    /// </summary>
+    public static bool MatchesBlockedOneSpace(ReadOnlySpan<int> cells, int size, int color, int target)
+    {
+        if (!LocalPatternMatcher.IsTargetValid(cells, size, color, target)) return false;
+        for (int symmetry = 0; symmetry < 8; symmetry++)
+            if (LocalPatternMatcher.HasStone(cells,size,target,0,-2,color,symmetry)
+                && LocalPatternMatcher.HasStone(cells,size,target,0,-1,3-color,symmetry)
+                && LocalPatternMatcher.HasStone(cells,size,target,-1,-1,3-color,symmetry)) return true;
+        return false;
+    }
     /// <summary>一間の空点へ、斜めの相手石に支えられた割込みを許す型だけを調べる。</summary>
     public static bool MatchesOneSpace(ReadOnlySpan<int> cells, int size, int color, int target)
     {

@@ -468,6 +468,59 @@ public sealed class Board(int size)
     }
 
     // 戦術#5: 今すぐ取られる複数石を、安全な二呼吸点以上へ救出する。
+    // 戦術#42：二呼吸点の小連に三手で取られる脅威がある場合の限定救出。
+    internal HashSet<int> TwoLibertyRescuePoints(int color)
+    {
+        var result = new HashSet<int>();
+        if (Size != 9 || IsFinished) return result;
+        Board Clone(Board b) { var c = b.Copy(); c.history.UnionWith(b.history); return c; }
+        (bool forced, bool cutoff) Read(Board root, int anchor, HashSet<int> original)
+        {
+            int nodes = 0; bool cutoff = false;
+            bool Search(Board b, int side, int depth)
+            {
+                if (++nodes > 512) { cutoff = true; return false; }
+                if (original.All(p => b.cells[p] != color)) return true;
+                if (depth == 0 || b.IsFinished || b.cells[anchor] != color) return false;
+                int?[] moves = side == color
+                    ? Enumerable.Range(0, b.cells.Length).Select(p => (int?)p).Append(null).ToArray()
+                    : b.NeighborsOfGroup(anchor).Distinct().Order().Select(p => (int?)p).ToArray();
+                bool any = false;
+                foreach (int? p in moves)
+                {
+                    var next = Clone(b);
+                    if (!next.Play(side, p)) continue;
+                    any = true;
+                    bool captured = Search(next, 3 - side, depth - 1);
+                    if (side != color && captured) return true;
+                    if (side == color && !captured) return false;
+                }
+                return side == color && any;
+            }
+            bool forced = Search(root, 3 - color, 3);
+            return (forced, cutoff);
+        }
+        var seen = new HashSet<int>();
+        for (int anchor = 0; anchor < cells.Length; anchor++)
+        {
+            if (cells[anchor] != color || seen.Contains(anchor)) continue;
+            var group = Group(cells, anchor).stones; seen.UnionWith(group);
+            if (group.Count is < 2 or > 6 || HasTwoEyes(color, anchor)) continue;
+            var liberties = NeighborsOfGroup(anchor).Distinct().Take(3).ToArray();
+            if (liberties.Length != 2) continue;
+            var threat = Read(this, anchor, group);
+            if (!threat.forced || threat.cutoff) continue;
+            foreach (int candidate in liberties)
+            {
+                var after = Clone(this);
+                if (!after.Play(color, candidate) || after.cells[anchor] != color
+                    || after.StonesLostToImmediateReply(color, candidate) != 0) continue;
+                var saved = Read(after, anchor, group);
+                if (!saved.forced && !saved.cutoff) result.Add(candidate);
+            }
+        }
+        return result;
+    }
     private Dictionary<int, int> AtariRescuePoints(int color)
     {
         var result = new Dictionary<int, int>(); var seen = new HashSet<int>();
@@ -699,8 +752,9 @@ public sealed class Board(int size)
     }
     internal bool ShouldDeferOneSpaceSplit(int color, int point)
     {
-        if (Size != 9 || !KifuwarabeGoPolypropylene.Domain.LocalPatterns.SplitShape.SplitShapePattern
-                .MatchesOneSpace(cells, Size, color, point)) return false;
+        bool openSplit = Size == 9 && KifuwarabeGoPolypropylene.Domain.LocalPatterns.SplitShape.SplitShapePattern.MatchesOneSpace(cells,Size,color,point);
+        bool blockedSplit = Size is 9 or 19 && !Neighbors(point).Any(p => cells[p] == color) && KifuwarabeGoPolypropylene.Domain.LocalPatterns.SplitShape.SplitShapePattern.MatchesBlockedOneSpace(cells,Size,color,point);
+        if (!openSplit && !blockedSplit) return false;
         if (HasRecoverableSplitWithKosumi(color, point)) return false;
         if (Neighbors(point).Any(p => cells[p] == color && HasTwoEyes(color, p))) return false;
         var trial = Copy();
@@ -711,7 +765,7 @@ public sealed class Board(int size)
     }
     // 戦術#21：敵に接する二呼吸点の孤立単石を、9路の通常候補だけ後回しにする。
     // すぐアタリを掛けられて救出に追われる形を減らす試み。捨て石を禁止しない。
-    // 戦術#35：9/19路では、援軍なしで敵の直線三石へ触れる三呼吸点単石も後回し。
+    // 戦術#35：援軍なしで敵の直線三石へ触れる三呼吸点単石も通常候補で後回し。
     // 斜めに味方がある接触、捕獲、敵へのアタリはこの追加条件から除く。
     internal bool ShouldDeferExposedSingle(int color, int point)
     {
@@ -798,7 +852,45 @@ public sealed class Board(int size)
         return pressure;
     }
 
-    // 戦術#31：一眼形成後、攻め二手以内の捕獲を証明できた場合だけ一眼優先を外す。
+    // 三呼吸点の同一連へ空間を増やさず足し、三手で取られる通常候補だけ後回し。
+    // 捕獲・アタリ・眼形成・連絡を除外し、打切りは不明として元の順位を保つ。
+    internal bool ShouldDeferFutileExtension(int color, int point)
+    {
+        if (Size != 9 || cells[point] != 0 || Neighbors(point).Any(p => cells[p] == 0)) return false;
+        var adjacent = Neighbors(point).Where(p => cells[p] == color).ToArray();
+        if (adjacent.Length == 0) return false;
+        var group = Group(cells, adjacent[0]).stones;
+        if (group.Count < 2 || adjacent.Any(p => !group.Contains(p))
+            || NeighborsOfGroup(adjacent[0]).Count() != 3 || FormsSinglePointEye(color, point)) return false;
+        Board Clone(Board b) { var copy = b.Copy(); copy.history.UnionWith(b.history); return copy; }
+        var after = Clone(this);
+        if (!after.Play(color, point) || after.cells.Count(c => c == 3 - color) != cells.Count(c => c == 3 - color)
+            || after.NeighborsOfGroup(point).Count() != 2 || after.HasTwoEyes(color, point)
+            || after.Neighbors(point).Any(p => after.cells[p] == 3 - color && after.NeighborsOfGroup(p).Count() == 1)) return false;
+        var original = after.Group(after.cells, point).stones;
+        int nodes = 0;
+        bool Captured(Board b, int side, int depth)
+        {
+            if (++nodes > 512) return false;
+            if (original.All(p => b.cells[p] != color)) return true;
+            if (depth == 0 || b.IsFinished || b.cells[point] != color) return false;
+            int?[] moves = side == color ? Enumerable.Range(0, cells.Length).Select(p => (int?)p).Append(null).ToArray()
+                : b.NeighborsOfGroup(point).Distinct().Order().Select(p => (int?)p).ToArray();
+            bool any = false;
+            foreach (int? p in moves)
+            {
+                var next = Clone(b);
+                if (!next.Play(side, p)) continue;
+                any = true;
+                bool forced = Captured(next, 3 - side, depth - 1);
+                if (side != color && forced) return true;
+                if (side == color && !forced) return false;
+            }
+            return side == color && any;
+        }
+        return Captured(after, 3 - color, 3);
+    }
+    // 戦術#31/#39：二呼吸点は三手、三呼吸点は五手以内の捕獲証明で一眼優先だけ外す。
     // 4096ノード打切り/未検出は不明として元の優先を維持。通常候補自体は除外しない。
     internal bool ShouldPrioritizeSinglePointEye(int color, int point)
     {
@@ -809,7 +901,8 @@ public sealed class Board(int size)
         if (after.cells.Count(c => c == 3-color) != cells.Count(c => c == 3-color)
             || after.HasTwoEyes(color, point)) return true;
         var original = after.Group(after.cells, point).stones;
-        if (after.NeighborsOfGroup(point).Take(3).Count() != 2) return true;
+        int liberties = after.NeighborsOfGroup(point).Take(4).Count();
+        if (liberties is not (2 or 3)) return true;
         int nodes=0;
         bool Captured(Board b, int side, int depth)
         {
@@ -831,7 +924,7 @@ public sealed class Board(int size)
             }
             return side == color && any;
         }
-        return !Captured(after,3-color,3);
+        return !Captured(after,3-color,liberties == 3 ? 5 : 3);
     }
 
     // 戦術#18：序盤の最終同順位でコスミによる展開を検討する。
@@ -911,6 +1004,7 @@ public sealed class Board(int size)
         var protectedOwners = ProtectedTerritoryOwners();
         var invasionCaptures = SmallInvasionCapturePoints(color);
         var rescues = AtariRescuePoints(color);
+        var twoLibRescues = TwoLibertyRescuePoints(color);
         var splits = FindSmallInvasionAtariMoves(color);
         var singleRescues = FindSafeSingleStoneRescueMoves(color);
         // 戦術#23：9路の二眼完成を通常の形回避より優先。既存緊急手と除外検査は維持。
@@ -939,7 +1033,10 @@ public sealed class Board(int size)
             .ThenByDescending(singleRescues.Contains)
             .ThenByDescending(twoEyeCompletions.Contains)
             .ThenByDescending(p => CaptureAndAtariPressure(color, p))
+            .ThenByDescending(twoLibRescues.Contains)
             .ThenByDescending(p => ShouldPrioritizeSinglePointEye(color, p))
+            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
+                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferFutileExtension(color, p))
             .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
                 && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferEmptyTriangle(color, p))
             .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
@@ -1010,6 +1107,7 @@ public sealed class Board(int size)
             if (expandOpening && LinePenalty(p) == 0 && !openCorners.Contains(p)
                 && !rescues.ContainsKey(p) && !invasionCaptures.Contains(p) && !splits.Contains(p) && !singleRescues.Contains(p))
                 tacticApplications.Add(new("opening-lines", MoveCount, color, p));
+            if (twoLibRescues.Contains(p)) tacticApplications.Add(new("rescue-two-lib-chain", MoveCount, color, p));
             if (singleRescues.Contains(p)) tacticApplications.Add(new("safe-single-rescue", MoveCount, color, p));
             if (snapback) tacticApplications.Add(new("resolve-before-pass", MoveCount, color, p));
             if (invasionCaptures.Contains(p)) tacticApplications.Add(new("minimum-invasion-defense", MoveCount, color, p));

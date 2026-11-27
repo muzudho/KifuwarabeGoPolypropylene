@@ -10,7 +10,197 @@ internal static class SelfTest
             if (!ok) throw new InvalidOperationException("FAIL: " + name);
             count++;
         }
+        // 戦術#20：実戦1706363白58F2。別の連が二眼でも通常の団子回避を解除しない。
+        int?[] postLifeGame = { 48, 29, 33, 51, 41, 21, 50, 22, 60, 23, 37, 24, 28, 38, 47, 42, 52, 43, 34, 44, 53, 56, 55, 57, 64, 58, 35, 49, 40, 59, 39, 20, 68, 10, 67, 16, 19, 70, 69, 61, 9, 11, 66, 3, 25, 4, 17, 13, 45, 1, 46, 0, 18, 5, 7, 6, 15 };
+        foreach (int postLifeColor in new[] { 1, 2 })
+        for (int postLifeSym = 0; postLifeSym < 8; postLifeSym++)
+        {
+            int PostLifeMap(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if (postLifeSym >= 4) x = 8 - x;
+                for (int i = 0; i < postLifeSym % 4; i++) (x, y) = (y, 8 - x);
+                return y * 9 + x;
+            }
+            var postLife = new Board(9);
+            for (int i = 0; i < postLifeGame.Length; i++)
+            {
+                int originalColor = i % 2 + 1;
+                int color = originalColor == 2 ? postLifeColor : 3 - postLifeColor;
+                int? point = postLifeGame[i] is int p ? PostLifeMap(p) : null;
+                Check(postLife.Play(color, point), "post-life full history legal");
+            }
+            Check(Enumerable.Range(0, 81).Any(p => postLife.At(p % 9, p / 9) == postLifeColor
+                && postLife.HasTwoEyes(postLifeColor, p)), "post-life already has two eyes");
+            int target = PostLifeMap(14);
+            string before = postLife.PositionKey;
+            Check(postLife.ShouldDeferDumpling(postLifeColor, target), "post-life target is deferred dumpling");
+            Check(postLife.PositionKey == before, "post-life shape check does not mutate");
+            int? selected = postLife.Generate(postLifeColor);
+            Check(selected.HasValue && selected != target, "post-life prefers alternative to dumpling");
+            Check(selected is int q && !KifuwarabeGoPolypropylene.Domain.LocalPatterns.DumplingStones
+                .DumplingStonesPattern.Matches(before.Select(c => c - '0').ToArray(), 9, postLifeColor, q),
+                "post-life alternative is not another dumpling");
+        }
+        // 戦術#31：一眼を作っても取られる実戦と、反撃できる二呼吸点の負例。
+        int?[] trappedEyeHistory = { 50,29,57,33,31,21,22,23,12,20,14,24,15,38,43,42,51,47,16,56,66,58,49,59,60,10,65,61,52,64,68,70,13,69,34,25,26,0,67,1,73,55,39,48,30,8,77,7,53,6,5,18,11,2,3,19,63,36,74,37,62,45,40,54,72,71,17 };
+        for (int swap = 0; swap < 2; swap++)
+        for (int symmetry = 0; symmetry < 8; symmetry++)
+        {
+            int MapEye(int p)
+            {
+                int x=p%9,y=p/9;
+                if(symmetry>=4)x=8-x;
+                for(int k=0;k<symmetry%4;k++)(x,y)=(y,8-x);
+                return x+9*y;
+            }
+            int owner=swap==0?2:1;
+            var trapped=new Board(9);
+            for(int i=0;i<trappedEyeHistory.Length;i++)
+            {
+                int color=i%2+1;if(swap==1)color=3-color;
+                Check(trapped.Play(color,trappedEyeHistory[i] is int p?MapEye(p):null),"trapped eye full history");
+            }
+            int target=MapEye(79);string before=trapped.PositionKey;
+            Check(trapped.FormsSinglePointEye(owner,target),"trapped one eye detected");
+            Check(!trapped.ShouldPrioritizeSinglePointEye(owner,target),"bounded capture removes eye priority");
+            Check(trapped.PositionKey==before,"eye reading does not mutate");
+            Check(trapped.Generate(owner)!=target,"prefer other move to trapped eye");
+            int defender=swap==0?1:2;var counter=new Board(9);
+            foreach(int p in new[]{1,10,3,12,21,29,28})Check(counter.Play(defender,MapEye(p)),"countercapture friendly setup");
+            foreach(int p in new[]{2,11,20,19})Check(counter.Play(3-defender,MapEye(p)),"countercapture enemy setup");
+            before=counter.PositionKey;
+            Check(counter.FormsSinglePointEye(defender,MapEye(9)),"countercapture one eye detected");
+            Check(counter.ShouldPrioritizeSinglePointEye(defender,MapEye(9)),"retain eye priority with countercapture");
+            Check(counter.PositionKey==before,"countercapture reading does not mutate");
+            Check(counter.Play(defender,MapEye(9)),"countercapture eye move");
+            Check(counter.Play(3-defender,MapEye(18)),"countercapture opponent attack");
+            Check(counter.Play(defender,MapEye(27)),"countercapture defense");
+            foreach(int p in new[]{1,10,9})Check(counter.At(MapEye(p)%9,MapEye(p)/9)==defender,"countercapture retains original stones");
+        }
+        // 戦術#18：全履歴でコスミの橋と割込み後の再連絡を確認。未確認の長期生きとは区別する。
+        int[] kosumiOpening={29,50,33,57,21,31,22,32,23,42,24,47,38,46,49,58};
+        for(int swap=0;swap<2;swap++)for(int symmetry=0;symmetry<8;symmetry++)
+        {
+            int MapKosumi(int p){int x=p%9,y=p/9;if(symmetry>=4)x=8-x;for(int i=0;i<symmetry%4;i++)(x,y)=(y,8-x);return x+9*y;}
+            int owner=swap==0?1:2;
+            Board KosumiReplay(){var b=new Board(9);for(int i=0;i<kosumiOpening.Length;i++){int color=i%2+1;if(swap==1)color=3-color;Check(b.Play(color,MapKosumi(kosumiOpening[i])),"kosumi full history");}return b;}
+            var candidate=KosumiReplay();int target=MapKosumi(39);string key=candidate.PositionKey;
+            Check(candidate.IsLibertyImprovingKosumiConnection(owner,target),"kosumi two bridges recover");
+            Check(candidate.HasRecoverableSplitWithKosumi(owner,target),"kosumi split recovers");
+            Check(!candidate.ShouldDeferEmptyTriangle(owner,target),"necessary kosumi triangle exception");
+            Check(!candidate.ShouldDeferOneSpaceSplit(owner,target),"recoverable kosumi split exception");
+            Check(candidate.PositionKey==key,"kosumi checks nonmutating");
+            if(swap==0&&symmetry==0)Check(candidate.Generate(owner)==target,"kosumi actual root chooses D5");
+            var blocked=KosumiReplay();Check(blocked.Play(owner,null),"kosumi blocked setup pass");Check(blocked.Play(3-owner,MapKosumi(48)),"kosumi bridge occupied");
+            Check(!blocked.IsLibertyImprovingKosumiConnection(owner,target),"occupied kosumi bridge rejected");
+            Check(!blocked.HasRecoverableSplitWithKosumi(owner,target),"occupied bridge split exception rejected");
+            var plain=new Board(9);Check(plain.Play(owner,MapKosumi(29)),"bare split friendly");Check(plain.Play(3-owner,MapKosumi(39)),"bare split enemy");
+            Check(plain.ShouldDeferOneSpaceSplit(owner,MapKosumi(31)),"bare split still deferred");
+            Check(!plain.HasRecoverableSplitWithKosumi(owner,MapKosumi(31)),"bare split no kosumi exception");
+            foreach(int moves in new[]{397,398,399})
+            {
+                var terminal=KosumiReplay();
+                // 盤面を保ち400手境界だけを人工的に再現する。
+                typeof(Board).GetProperty(nameof(Board.MoveCount))!.SetValue(terminal,moves);
+                Check(terminal.IsLibertyImprovingKosumiConnection(owner,target)==(moves==397),"kosumi no imaginary post-limit reply");
+                Check(terminal.HasRecoverableSplitWithKosumi(owner,target)==(moves==397),"split no imaginary post-limit reply");
+                Check(terminal.MoveCount==moves,"kosumi limit checks nonmutating");
+            }
+        }
         LocalPatternSelfTest.Run(Check);
+        // 戦術#25の反例：一石取りと別連アタリでも、十一石を取り返されるB5は選ばない。
+        var pressureReversalGame = new (int Color, int? Point)[] { (1, 29), (2, 50), (1, 33), (2, 32), (1, 47), (2, 24), (1, 21), (2, 57), (1, 22), (2, 23), (1, 38), (2, 60), (1, 42), (2, 41), (1, 51), (2, 34), (1, 56), (2, 65), (1, 58), (2, 67), (1, 59), (2, 49), (1, 68), (2, 69), (1, 77), (2, 76), (1, 14), (2, 15), (1, 16), (2, 13), (1, 25), (2, 52), (1, 64), (2, 48), (1, 70), (2, 12), (1, 10), (2, 11), (1, 61), (2, 43), (1, 0), (2, 20), (1, 19), (2, 30), (1, 39), (2, 31), (1, 40), (2, 73), (1, 5), (2, 78), (1, 4), (2, 3), (1, 8), (2, 63), (1, 27), (2, 55), (1, 36), (2, 46), (1, 45), (2, 6), (1, 54), (2, 7), (1, 79), (2, 18), (1, 71), (2, 28) };
+        // 戦術#27：実戦1706252の42手後。二呼吸点の二石を、六呼吸点の四石へつなぐ。
+        foreach (int connectionColor in new[] { 1, 2 })
+        for (int connectionSym = 0; connectionSym < 8; connectionSym++)
+        {
+            int ConnectionMap(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if (connectionSym >= 4) x = 8 - x;
+                for (int i = 0; i < connectionSym % 4; i++) (x, y) = (8 - y, x);
+                return y * 9 + x;
+            }
+            var connectionRoot = new Board(9);
+            foreach (var move in pressureReversalGame.Take(42))
+                Check(connectionRoot.Play(connectionColor == 1 ? move.Color : 3 - move.Color,
+                    move.Point is int p ? ConnectionMap(p) : null), "tactic#27 full history");
+            int target = ConnectionMap(30);
+            string beforeConnection = connectionRoot.PositionKey;
+            Check(connectionRoot.IsLibertyImprovingConnection(connectionColor, target), "tactic#27 connection detected");
+            Check(!connectionRoot.ShouldDeferEmptyTriangle(connectionColor, target), "tactic#27 necessary triangle allowed");
+            Check(beforeConnection == connectionRoot.PositionKey, "tactic#27 detection preserves root");
+            Check(connectionRoot.Generate(connectionColor) == target, "tactic#27 selects connecting D4");
+            var ordinary = new Board(9);
+            foreach (int p in new[] { 29, 21 }) Check(ordinary.Play(connectionColor, ConnectionMap(p)), "tactic#27 ordinary setup");
+            Check(!ordinary.IsLibertyImprovingConnection(connectionColor, ConnectionMap(20)), "tactic#27 no weak chain exception");
+            Check(ordinary.ShouldDeferEmptyTriangle(connectionColor, ConnectionMap(20)), "tactic#27 ordinary triangle still deferred");
+            Check(ordinary.Play(connectionColor, ConnectionMap(30)), "tactic#27 same chain setup");
+            Check(!ordinary.IsLibertyImprovingConnection(connectionColor, ConnectionMap(20)), "tactic#27 already connected excluded");
+            Check(!new Board(19).IsLibertyImprovingConnection(connectionColor, 60), "tactic#27 other board size excluded");
+        }
+        foreach (int reversalColor in new[] { 1, 2 })
+        for (int reversalSym = 0; reversalSym < 8; reversalSym++)
+        {
+            int ReversalMap(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if (reversalSym >= 4) x = 8 - x;
+                for (int i = 0; i < reversalSym % 4; i++) (x, y) = (y, 8 - x);
+                return x + y * 9;
+            }
+            var pressureReversalRoot = new Board(9);
+            var pressureReversalTrial = new Board(9);
+            foreach (var move in pressureReversalGame)
+            {
+                int c = reversalColor == 1 ? move.Color : 3 - move.Color;
+                int? q = move.Point is int point ? ReversalMap(point) : null;
+                Check(pressureReversalRoot.Play(c, q) && pressureReversalTrial.Play(c, q), "tactic#25 reversal history");
+            }
+            int bad = ReversalMap(37);
+            Check(pressureReversalRoot.CaptureAndAtariPressure(reversalColor, bad) == 2,
+                "tactic#25 pattern alone also matches losing capture");
+            Check(pressureReversalTrial.Play(reversalColor, bad), "tactic#25 bad capture legal");
+            Check(pressureReversalTrial.StonesLostToImmediateReply(reversalColor, bad) == 11,
+                "tactic#25 bad capture loses eleven");
+            Check(pressureReversalRoot.Generate(reversalColor) != bad, "tactic#25 does not choose losing pressure");
+        }
+
+        // 戦術#25：捕獲と別連アタリの実選択、および二眼完成を先に守る実戦反例。
+        var pressureGames = new[] { new (int Color, int? Point)[] { (1, 48), (2, 29), (1, 30), (2, 20), (1, 38), (2, 21), (1, 31), (2, 22), (1, 32), (2, 23), (1, 33), (2, 24), (1, 68), (2, 41), (1, 43), (2, 42), (1, 25), (2, 47), (1, 56), (2, 46), (1, 37), (2, 49), (1, 57), (2, 58), (1, 67), (2, 10), (1, 60), (2, 16), (1, 34), (2, 52), (1, 51), (2, 55), (1, 64), (2, 61), (1, 70), (2, 65), (1, 45), (2, 66), (1, 54), (2, 46), (1, 15), (2, 0), (1, 14), (2, 2), (1, 7), (2, 3), (1, 28), (2, 5), (1, 17), (2, 27), (1, 19), (2, 18), (1, 40), (2, 35), (1, 55), (2, 44), (1, 53), (2, 62), (1, 78), (2, 71), (1, 13), (2, 4), (1, 12), (2, 11) }, new (int Color, int? Point)[] { (1, 50), (2, 29), (1, 48), (2, 33), (1, 31), (2, 21), (1, 22), (2, 23), (1, 13), (2, 38), (1, 14), (2, 42), (1, 51), (2, 47), (1, 25), (2, 56), (1, 57), (2, 58), (1, 66), (2, 49), (1, 40), (2, 59), (1, 60), (2, 16), (1, 15), (2, 52), (1, 68), (2, 61), (1, 70), (2, 64), (1, 34), (2, 43), (1, 24), (2, 7), (1, 12), (2, 17), (1, 11), (2, 10), (1, 35), (2, 0), (1, 39), (2, 6), (1, 32), (2, 41), (1, 69), (2, 5), (1, 19), (2, 4), (1, 20), (2, 30), (1, 28), (2, 3), (1, 37), (2, 2), (1, 46), (2, 26), (1, 44), (2, 63), (1, 53), (2, 73), (1, 18), (2, 80), (1, 55), (2, 65), (1, 9), (2, 54) } };
+        for (int pressureCase = 0; pressureCase < pressureGames.Length; pressureCase++)
+        for (int pressureSwap = 0; pressureSwap < 2; pressureSwap++)
+        for (int pressureSym = 0; pressureSym < 8; pressureSym++)
+        {
+            int PressureMap(int p)
+            {
+                int x = p % 9, y = p / 9;
+                if (pressureSym >= 4) x = 8 - x;
+                for (int i = 0; i < pressureSym % 4; i++) (x, y) = (y, 8 - x);
+                return x + y * 9;
+            }
+            var pressureRoot = new Board(9);
+            foreach (var move in pressureGames[pressureCase])
+                Check(pressureRoot.Play(pressureSwap == 0 ? move.Color : 3 - move.Color,
+                    move.Point is int q ? PressureMap(q) : null), "tactic#25 full history");
+            int own = pressureSwap == 0 ? 1 : 2;
+            int attack = PressureMap(pressureCase == 0 ? 50 : 1);
+            string pressureOriginal = pressureRoot.PositionKey;
+            Check(pressureRoot.CaptureAndAtariPressure(own, attack) > 0, "tactic#25 capture plus atari detected");
+            Check(pressureRoot.PositionKey == pressureOriginal, "tactic#25 detection preserves root");
+            if (pressureCase == 0)
+                Check(pressureRoot.Generate(own) == PressureMap(50), "tactic#25 selects F6 response");
+            else
+            {
+                int? selected = pressureRoot.Generate(own);
+                Check(selected is int q && pressureRoot.HasTwoEyes(own, q), "tactic#25 preserves two eyes priority");
+            }
+            Check(new Board(19).CaptureAndAtariPressure(own, attack) == 0
+                && new Board(9).CaptureAndAtariPressure(own, 40) == 0
+                && pressureRoot.CaptureAndAtariPressure(own, -1) == 0, "tactic#25 nonmatches");
+        }
+
         // 戦術#23：実戦1706191の二眼完成逃しを黒白八対称の全履歴で再現する。
         var twoEyeGame = new (int Color, int? Point)[] { (1, 29), (2, 50), (1, 33), (2, 32), (1, 21), (2, 24), (1, 22), (2, 23), (1, 38), (2, 57), (1, 42), (2, 51), (1, 41), (2, 40), (1, 47), (2, 34), (1, 43), (2, 52), (1, 44), (2, 35), (1, 56), (2, 65), (1, 58), (2, 48), (1, 49), (2, 67), (1, 59), (2, 68), (1, 60), (2, 39), (1, 14), (2, 64), (1, 15), (2, 16), (1, 61), (2, 53), (1, 42), (2, 69), (1, 33), (2, 36), (1, 43), (2, 55), (1, 70), (2, 79), (1, 4), (2, 37), (1, 46), (2, 28), (1, 10), (2, 30), (1, 20), (2, 45), (1, 31), (2, 41), (1, 0), (2, 6), (1, 2), (2, 19), (1, 3), (2, 7), (1, 72), (2, 73), (1, 75), (2, 66), (1, 76), (2, 25), (1, 77), (2, 5), (1, 13), (2, 54), (1, 11), (2, 18) };
         for (int eyeSwap = 0; eyeSwap < 2; eyeSwap++)

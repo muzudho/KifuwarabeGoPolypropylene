@@ -10,6 +10,13 @@ public sealed class BattleLessons
     private readonly Dictionary<string, LessonEvidence> examples = new();
     public IReadOnlyCollection<LessonReport> Reports => learned.Values;
     public IReadOnlyCollection<LessonEvidence> Examples => examples.Values;
+    internal void CopyFrom(BattleLessons source)
+    {
+        learned.Clear();
+        examples.Clear();
+        foreach (var report in source.Reports) learned.Add(report.Id, report);
+        foreach (var example in source.Examples) examples.Add(example.Id, example);
+    }
     public void RecordExample(LessonEvidence evidence) => examples.TryAdd(evidence.Id, evidence);
     public void Avoid(string id)
     {

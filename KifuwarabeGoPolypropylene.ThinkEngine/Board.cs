@@ -12,7 +12,21 @@ public sealed class Board(int size)
     public IReadOnlyList<TacticApplication> TacticApplications => tacticApplications.AsReadOnly();
     private readonly Dictionary<string, string> failedCandidates = new();
     private static string Key(int[] position) => string.Concat(position.Select(c => (char)('0' + c)));
-    private Board Copy() => new(Size) { cells = (int[])cells.Clone(), previous = previous, MoveCount = MoveCount, ConsecutivePasses = ConsecutivePasses, BlackPrisoners = BlackPrisoners, WhitePrisoners = WhitePrisoners };
+    [ThreadStatic] private static long? generationDeadline;
+    private int? bestTimedMove;
+    private int[]? bestTimedRank;
+    private Action<int?>? candidateCheckpoint;
+    public bool LastGenerationTimedOut { get; private set; }
+    private static void CheckGenerationDeadline()
+    {
+        if (generationDeadline is long deadline && System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+            throw new TimeoutException("move generation deadline");
+    }
+    private Board Copy()
+    {
+        CheckGenerationDeadline();
+        return new(Size) { cells = (int[])cells.Clone(), previous = previous, MoveCount = MoveCount, ConsecutivePasses = ConsecutivePasses, BlackPrisoners = BlackPrisoners, WhitePrisoners = WhitePrisoners };
+    }
     public int At(int x, int y) => cells[y * Size + x];
     public string PositionKey => Key(cells);
     public int ConsecutivePasses { get; private set; }
@@ -58,6 +72,7 @@ public sealed class Board(int size)
     }
     private (HashSet<int> stones, bool liberty) Group(int[] position, int start)
     {
+        CheckGenerationDeadline();
         var stones = new HashSet<int> { start };
         var pending = new Stack<int>();
         pending.Push(start);
@@ -997,7 +1012,92 @@ public sealed class Board(int size)
         return adjacent.Where(q => cells[q] == 3-color)
             .All(q => trial.NeighborsOfGroup(q).Take(2).Count() >= 2);
     }
-    public int? Generate(int color)
+    // 7.5秒で読みを打ち切り、8秒の応答上限に着手適用の余裕を残す。
+    public int? Generate(int color) => Generate(color, TimeSpan.FromSeconds(7.5));
+
+    public int? Generate(int color, TimeSpan budget)
+        => Generate(color, budget, null);
+
+    // 決定的な中断試験用。通常運転はコールバックを指定しない。
+    internal int? Generate(int color, TimeSpan budget, Action<int?>? checkpoint)
+    {
+        if (color is not (1 or 2)) throw new ArgumentException("invalid color");
+        if (budget < TimeSpan.Zero || budget > TimeSpan.FromSeconds(7.5))
+            throw new ArgumentException("move budget must be between zero and 7.5 seconds");
+        LastGenerationTimedOut = false;
+        if (ReachedMoveLimit) return null;
+        var work = Copy();
+        work.candidateCheckpoint = checkpoint;
+        work.history.Clear();
+        work.history.UnionWith(history);
+        foreach (var item in failedCandidates) work.failedCandidates.Add(item.Key, item.Value);
+        work.tacticApplications.AddRange(tacticApplications);
+        // 戦訓統計も通常終了までは隔離する。
+        work.Lessons.CopyFrom(Lessons);
+        var priorDeadline = generationDeadline;
+        generationDeadline = System.Diagnostics.Stopwatch.GetTimestamp()
+            + (long)(budget.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+        int? move;
+        try
+        {
+            CheckGenerationDeadline();
+            move = work.GenerateCore(color);
+            CheckGenerationDeadline();
+        }
+        catch (TimeoutException)
+        {
+            LastGenerationTimedOut = true;
+            move = work.bestTimedMove;
+        }
+        finally { generationDeadline = priorDeadline; }
+        if (LastGenerationTimedOut)
+        {
+            // 読み途中の盤面は捨て、検証済み候補を実盤へ一度だけ適用する。
+            if (!Play(color, move)) throw new InvalidOperationException("timed move became illegal");
+            return move;
+        }
+        cells = work.cells;
+        previous = work.previous;
+        MoveCount = work.MoveCount;
+        ConsecutivePasses = work.ConsecutivePasses;
+        BlackPrisoners = work.BlackPrisoners;
+        WhitePrisoners = work.WhitePrisoners;
+        history.Clear(); history.UnionWith(work.history);
+        failedCandidates.Clear();
+        foreach (var item in work.failedCandidates) failedCandidates.Add(item.Key, item.Value);
+        tacticApplications.Clear(); tacticApplications.AddRange(work.tacticApplications);
+        Lessons.CopyFrom(work.Lessons);
+        return move;
+    }
+
+    private static int CompareMoveRanks(int[] left, int[] right)
+    {
+        for (int i = 0; i < left.Length; i++)
+            if (left[i] != right[i]) return left[i].CompareTo(right[i]);
+        return 0;
+    }
+
+    private void RememberTimedCandidate(int color, int p, int[] rank, int[] protectedOwners, IReadOnlySet<int> plannedCorners,
+        Dictionary<int, int> rescues, HashSet<int> invasionCaptures, IReadOnlyList<int> splits, IReadOnlySet<int> singleRescues)
+    {
+        CheckGenerationDeadline();
+        if (bestTimedRank is not null && CompareMoveRanks(rank, bestTimedRank) >= 0) return;
+        if (protectedOwners[p] == color || plannedCorners.Contains(p) && !rescues.ContainsKey(p)
+            && !invasionCaptures.Contains(p) && !splits.Contains(p) && !singleRescues.Contains(p)) return;
+        var trial = Copy();
+        if (!trial.Play(color, p)) return;
+        string experience = $"{Key(cells)}:{(previous is null ? "" : Key(previous))}:{color}:{p}";
+        if (failedCandidates.ContainsKey(experience) || history.Contains(Key(trial.cells)) || IsEye(color, p)) return;
+        int captured = cells.Count(c => c == 3 - color) - trial.cells.Count(c => c == 3 - color);
+        int lost = trial.StonesLostToImmediateReply(color, p);
+        if (captured == 0 && lost > 0 && !trial.HasSafeSnapback(color, p, history)
+            || captured > 0 && lost > captured) return;
+        CheckGenerationDeadline();
+        bestTimedMove = p;
+        bestTimedRank = rank;
+    }
+
+    private int? GenerateCore(int color)
     {
         if (color is not (1 or 2)) throw new ArgumentException("invalid color");
         if (ReachedMoveLimit) return null;
@@ -1027,31 +1127,33 @@ public sealed class Board(int size)
             return Math.Min(Math.Abs(edge - 2), Math.Abs(edge - 3));
         }
         foreach (int p in Enumerable.Range(0, cells.Length)
-            .OrderByDescending(p => rescues.GetValueOrDefault(p))
-            .ThenByDescending(invasionCaptures.Contains)
-            .ThenBy(p => splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue)
-            .ThenByDescending(singleRescues.Contains)
-            .ThenByDescending(twoEyeCompletions.Contains)
-            .ThenByDescending(p => CaptureAndAtariPressure(color, p))
-            .ThenByDescending(twoLibRescues.Contains)
-            .ThenByDescending(p => ShouldPrioritizeSinglePointEye(color, p))
-            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
-                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferFutileExtension(color, p))
-            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
-                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferEmptyTriangle(color, p))
-            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
-                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferOneSpaceSplit(color, p))
-            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
-                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferExposedSingle(color, p))
-            // 戦術#34：既存の緊急・眼・形の順位を維持し、通常の囲まれた伸びを後回し。
-            .ThenBy(p => !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
-                && !splits.Contains(p) && !singleRescues.Contains(p) && ShouldDeferEnclosedExtension(color,p))
-            .ThenByDescending(p => komokuOpening && p == komoku)
-            .ThenBy(p => openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue)
-            // 戦術#20：団子回避を三四線の維持より先にし、空き角・緊急・眼の順位は保つ。
-            .ThenBy(p => ShouldDeferDumpling(color, p))
-            .ThenBy(p => expandOpening ? LinePenalty(p) : 0)
-            .ThenByDescending(p => expandOpening && IsOpeningKosumiExpansion(color, p)))
+            .Select(p =>
+            {
+                CheckGenerationDeadline();
+                bool ordinary = !rescues.ContainsKey(p) && !invasionCaptures.Contains(p)
+                    && !splits.Contains(p) && !singleRescues.Contains(p);
+                int Flag(bool value) => value ? 1 : 0;
+                int[] rank = [
+                    -rescues.GetValueOrDefault(p), -Flag(invasionCaptures.Contains(p)),
+                    splits.Contains(p) ? splits.ToList().IndexOf(p) : int.MaxValue,
+                    -Flag(singleRescues.Contains(p)), -Flag(twoEyeCompletions.Contains(p)),
+                    -CaptureAndAtariPressure(color, p), -Flag(twoLibRescues.Contains(p)),
+                    -Flag(ShouldPrioritizeSinglePointEye(color, p)),
+                    Flag(ordinary && ShouldDeferFutileExtension(color, p)),
+                    Flag(ordinary && ShouldDeferEmptyTriangle(color, p)),
+                    Flag(ordinary && ShouldDeferOneSpaceSplit(color, p)),
+                    Flag(ordinary && ShouldDeferExposedSingle(color, p)),
+                    Flag(ordinary && ShouldDeferEnclosedExtension(color, p)),
+                    -Flag(komokuOpening && p == komoku),
+                    openCorners.Contains(p) ? openCorners.ToList().IndexOf(p) : int.MaxValue,
+                    Flag(ShouldDeferDumpling(color, p)), expandOpening ? LinePenalty(p) : 0,
+                    -Flag(expandOpening && IsOpeningKosumiExpansion(color, p)), p];
+                RememberTimedCandidate(color, p, rank, protectedOwners, plannedCorners, rescues, invasionCaptures, splits, singleRescues);
+                candidateCheckpoint?.Invoke(bestTimedMove);
+                return (point: p, rank);
+            })
+            .OrderBy(candidate => candidate.rank, Comparer<int[]>.Create(CompareMoveRanks))
+            .Select(candidate => candidate.point))
         {
             if (protectedOwners[p] == color) continue;
             if (plannedCorners.Contains(p) && !rescues.ContainsKey(p)

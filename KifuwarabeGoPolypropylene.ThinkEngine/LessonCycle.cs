@@ -18,6 +18,10 @@ internal static class LessonCycle
         int seed = int.Parse(Option("--seed", "1"));
         int games = int.Parse(Option("--games", "32"));
         int seconds = int.Parse(Option("--time-limit", "120"));
+        int? fixedSize = args.Contains("--board-size") ? int.Parse(Option("--board-size", "19")) : null;
+        bool selfPlayOnly = args.Contains("--self-play-only");
+        if (fixedSize is not null && (fixedSize < 2 || fixedSize > 19))
+            throw new ArgumentException("board-size must be between 2 and 19");
         string directory = Path.GetFullPath(Option("--output", "."));
         if (games < 1 || seconds < 1) throw new ArgumentException("games and time-limit must be positive");
         Directory.CreateDirectory(directory);
@@ -30,7 +34,7 @@ internal static class LessonCycle
         {
             if (timer.Elapsed.TotalSeconds >= seconds) { timedOut++; break; }
             // 9路・19路を優先し、各サイズで自己対局とランダム相手の両方を行う。
-            int size = new[] { 9, 19, 9, 19, 3, 5, 3, 5 }[gameIndex % 8];
+            int size = fixedSize ?? new[] { 9, 19, 9, 19, 3, 5, 3, 5 }[gameIndex % 8];
             // 前の局の長さが変わっても、この局の乱数列は変えない。
             int gameSeed = GameSeed(seed, gameIndex);
             var random = new Random(gameSeed);
@@ -40,7 +44,7 @@ internal static class LessonCycle
             int passes = 0, repeats = 0;
             string outcome = "move-limit";
             // ランダムな序盤と、ランダム対戦相手の有無で観測局面を変える。
-            bool randomOpponent = gameIndex % 4 >= 2;
+            bool randomOpponent = !selfPlayOnly && gameIndex % 4 >= 2;
             int openingLength = gameIndex % 5;
             for (int ply = 0; ply < Board.MoveLimit; ply++)
             {
@@ -87,7 +91,7 @@ internal static class LessonCycle
             if (outcome == "timeout") break;
         }
         var summary = new {
-            version = 7, seed, randomStream = "per-game-v1", requestedGames = games, completed, moveLimits, timedOut,
+            version = 7, seed, randomStream = "per-game-v1", requestedGames = games, fixedSize, selfPlayOnly, completed, moveLimits, timedOut,
             provisionallyScoredGames = completed + moveLimits, moveLimit = Board.MoveLimit,
             repeatedPositions = repeated, elapsedSeconds = timer.Elapsed.TotalSeconds,
             byBoardSize = bySize.Select(pair => new { size = pair.Key, games = pair.Value[0], completed = pair.Value[1], moveLimits = pair.Value[2], repeats = pair.Value[3] }),

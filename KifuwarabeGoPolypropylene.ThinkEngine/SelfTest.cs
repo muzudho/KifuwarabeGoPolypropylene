@@ -10,6 +10,34 @@ internal static class SelfTest
             if (!ok) throw new InvalidOperationException("FAIL: " + name);
             count++;
         }
+        foreach (int timedColor in new[] { 1, 2 })
+        {
+            var timed = new Board(19);
+            int? firstSaved = null;
+            int? lastSaved = null;
+            int? selected = timed.Generate(timedColor, TimeSpan.FromSeconds(7.5), best =>
+            {
+                firstSaved ??= best;
+                lastSaved = best;
+                if (best == 3 * 19 + 2) throw new TimeoutException("deterministic deadline");
+            });
+            Check(timed.LastGenerationTimedOut && selected == lastSaved && selected == 59,
+                "timeout uses best completed candidate for either color");
+            Check(firstSaved is not null && firstSaved != selected, "timeout improves on first candidate");
+            Check(timed.MoveCount == 1 && timed.At(2, 3) == timedColor
+                && timed.CountStones().Black + timed.CountStones().White == 1,
+                "timed search commits exactly one move");
+            Check(timed.Generate(3 - timedColor) is not null && !timed.LastGenerationTimedOut
+                && timed.MoveCount == 2, "generation works after timed search");
+            var expired = new Board(19);
+            expired.Play(timedColor, 59);
+            string beforeTimeout = expired.PositionKey;
+            Check(expired.Generate(3 - timedColor, TimeSpan.Zero) is null
+                && expired.LastGenerationTimedOut && expired.PositionKey == beforeTimeout
+                && expired.MoveCount == 2 && expired.ConsecutivePasses == 1,
+                "deadline before first evaluated candidate passes without partial mutation");
+            Check(new Board(19).Generate(timedColor) == selected, "full ranking agrees with best saved opening");
+        }
         // 戦術#18：実戦1706435の白8F3。最終同順位で隣接伸びE3よりコスミを検討する。
         int[] expansionHistory = {29,50,33,31,47,24,21};
         for (int swap=0; swap<2; swap++)

@@ -4,7 +4,7 @@ namespace KifuwarabeGoPolypropylene.ThinkEngine;
 public sealed class GtpEngine
 {
     private const string Columns = "ABCDEFGHJKLMNOPQRST";
-    private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "showboard", "final_score", "kfw-lessons", "quit"];
+    private static readonly string[] Commands = ["protocol_version", "name", "version", "known_command", "list_commands", "boardsize", "clear_board", "komi", "play", "genmove", "cgos-genmove_analyze", "showboard", "final_score", "kfw-lessons", "quit"];
     private readonly BattleLessons lessons = new();
     private Board board = new(19);
     private double komi;
@@ -30,7 +30,7 @@ public sealed class GtpEngine
     }
     private string Execute(string command, string[] args)
     {
-        int expected = command switch { "boardsize" or "komi" or "genmove" or "known_command" => 1, "play" => 2, _ => 0 };
+        int expected = command switch { "boardsize" or "komi" or "genmove" or "cgos-genmove_analyze" or "known_command" => 1, "play" => 2, _ => 0 };
         if (!Commands.Contains(command)) throw new ArgumentException("unknown command");
         if (args.Length != expected) throw new ArgumentException("invalid arguments");
         switch (command)
@@ -57,6 +57,24 @@ public sealed class GtpEngine
                 if (!board.Play(Color(args[0]), ParseVertex(args[1]))) throw new ArgumentException("illegal move");
                 return "";
             case "genmove": return FormatVertex(board.Generate(Color(args[0])));
+            case "cgos-genmove_analyze":
+                int color = Color(args[0]);
+                // 通常genmoveと同じ一手を一度だけ適用し、着手後の盤上石数を返す。
+                string move = FormatVertex(board.Generate(color));
+                var stones = board.CountStones();
+                int own = color == 1 ? stones.Black : stones.White;
+                int total = stones.Black + stones.White;
+                var analysis = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    comment = "石数の簡易評価（着手側視点）。winrateは盤上の自石割合で、勝つ確率ではありません。地・捕獲済み石・コミは含みません。",
+                    evaluation = "stone-count-ratio",
+                    perspective = "to-play",
+                    blackStones = stones.Black,
+                    whiteStones = stones.White,
+                    moves = new[] { new { move, score = color == 1 ? stones.Difference : -stones.Difference,
+                        winrate = total == 0 ? 0.5 : (double)own / total } }
+                });
+                return $"\n{analysis}\nplay {move}";
             case "showboard":
                 return "\n" + string.Join('\n', Enumerable.Range(0, board.Size).Reverse().Select(y => $"{y + 1,2} " + string.Join(' ', Enumerable.Range(0, board.Size).Select(x => ".XO"[board.At(x, y)])))) + "\n   " + string.Join(' ', Columns.Take(board.Size));
             default: return "";

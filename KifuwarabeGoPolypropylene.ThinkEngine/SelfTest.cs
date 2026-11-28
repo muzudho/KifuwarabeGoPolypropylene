@@ -756,6 +756,27 @@ internal static class SelfTest
             Check(game.MoveCount == moves, "generated moves and passes counted exactly once");
             Console.WriteLine($"Self-play {size}x{size}: {moves} moves, {repeats} repeats, {game.CountStones().Result}");
         }
+        Check(Exchange("known_command cgos-genmove_analyze\n").Contains("= true"), "analysis command advertised");
+        foreach (string side in new[] { "b", "w" })
+        {
+            string setup = "boardsize 9\nkomi 7.5\nplay b A1\nplay w J9\n";
+            string[] normal = Exchange(setup + $"genmove {side}\nshowboard\n").Split("\n\n");
+            string[] analyzed = Exchange(setup + $"cgos-genmove_analyze {side}\nshowboard\n").Split("\n\n");
+            string[] lines = analyzed[4].Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            using var json = System.Text.Json.JsonDocument.Parse(lines.First(x => x.StartsWith('{')));
+            var root = json.RootElement;
+            var value = root.GetProperty("moves")[0];
+            Check(lines.Last() == "play " + normal[4][2..], "analysis chooses same move as genmove");
+            Check(normal[5] == analyzed[5], "analysis applies exactly one same move");
+            int black = root.GetProperty("blackStones").GetInt32(), white = root.GetProperty("whiteStones").GetInt32();
+            int own = side == "b" ? black : white;
+            Check(value.GetProperty("score").GetInt32() == (side == "b" ? black - white : white - black), "analysis score uses mover perspective");
+            Check(Math.Abs(value.GetProperty("winrate").GetDouble() - (double)own / (black + white)) < 1e-12, "analysis reports stone ratio without komi");
+            Check(root.GetProperty("comment").GetString()!.Contains("勝つ確率ではありません"), "analysis explains ratio proxy");
+        }
+        string emptyAnalysis = Exchange("boardsize 9\n" + string.Concat(Enumerable.Repeat("play b pass\n", 400)) + "cgos-genmove_analyze w\n");
+        Check(emptyAnalysis.Contains("\"winrate\":0.5") && emptyAnalysis.Contains("play pass"), "empty board analysis is finite neutral ratio at move limit");
+        Check(Exchange("cgos-genmove_analyze invalid\n").StartsWith("? invalid color"), "analysis rejects invalid color");
         Check(Exchange("kfw-lessons\n").Contains("[]"), "GTP lesson reports");
         var empty = new Board(9);
         Check(empty.Score(7.5) == new AreaScore(0, 0, 81, 7.5), "empty board is neutral");
